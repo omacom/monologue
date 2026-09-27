@@ -6,6 +6,7 @@
 #include <QTimer>
 #include "backend.h"
 #include "theme.h"
+#include "thumbprovider.h"
 
 int main(int argc,char *argv[]) {
     // Custom timestamped frame/buffer inputs require Qt's FFmpeg backend.
@@ -21,6 +22,7 @@ int main(int argc,char *argv[]) {
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("theme",&theme);
     engine.rootContext()->setContextProperty("backend",&backend);
+    engine.addImageProvider("thumbs",new ThumbProvider(backend.thumbnails()->store()));
     engine.load(QUrl("qrc:/Main.qml"));
     if(engine.rootObjects().isEmpty()) return 1;
     // For headless packaging smoke checks: no fake sources or recording.

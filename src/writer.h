@@ -19,6 +19,8 @@ public:
     qint64 duration(qint64 now) const;
     std::optional<qint64> position(qint64 capturedAt) const;
     QList<Span> spans(qint64 begin, qint64 end) const;
+    // Take positions where a pause was resumed.
+    QList<qint64> joins() const;
     bool paused() const { return m_paused; }
     qint64 intervalStart() const { return m_start; }
 private:
@@ -40,6 +42,7 @@ public:
     void resume(qint64 now);
     void finish();
     qint64 duration(qint64 now) const { return m_clock.duration(now); }
+    QList<qint64> joins() const { return m_clock.joins(); }
     static bool supported(bool audio);
 signals:
     void finished();

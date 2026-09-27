@@ -6,7 +6,6 @@ pkgdesc='A simple, theme-synced webcam recorder for Omarchy'
 arch=('x86_64' 'aarch64')
 license=('MIT')
 depends=('ffmpeg' 'libpulse' 'qt6-base' 'qt6-declarative' 'qt6-multimedia>=6.8' 'xdg-desktop-portal')
-optdepends=('omacut: trim recordings directly from Monologue')
 makedepends=('gcc' 'make')
 source=()
 sha256sums=()

@@ -110,3 +110,32 @@ media::Probe media::probe(const QString &path) {
     if (!result.ok) result.error = "The recording could not be finalized as a playable H.264 MP4. Its files have been kept.";
     return result;
 }
+QStringList media::exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio) {
+    QStringList args{"-nostdin", "-v", "error", "-y", "-progress", "pipe:1", "-nostats"};
+    QString graph;
+    // One seeking input per kept range decodes only what survives the cut.
+    for (int i = 0; i < kept.size(); ++i) {
+        args << "-ss" << QString::number(kept[i].start, 'f', 3) << "-t" << QString::number(kept[i].length(), 'f', 3) << "-i" << source;
+        graph += QString("[%1:v:0]").arg(i) + (audio ? QString("[%1:a:0]").arg(i) : QString());
+    }
+    graph += QString("concat=n=%1:v=1:a=%2[v]").arg(kept.size()).arg(audio ? 1 : 0) + (audio ? "[a]" : "");
+    args << "-filter_complex" << graph << "-map" << "[v]";
+    if (audio) args << "-map" << "[a]" << "-c:a" << "aac" << "-b:a" << "192k";
+    args << "-c:v" << "libx264" << "-preset" << "veryfast" << "-crf" << "18" << "-pix_fmt" << "yuv420p"
+         << "-movflags" << "+faststart" << "-f" << "mp4" << destination;
+    return args;
+}
+QImage media::thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel) {
+    QProcess process;
+    process.start("ffmpeg", {"-nostdin", "-loglevel", "error", "-ss", QString::number(std::max(time, 0.0), 'f', 3), "-i", path,
+                             "-frames:v", "1", "-vf", QString("scale=-2:%1").arg(height), "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"});
+    // Poll, so a cancelled strip kills ffmpeg promptly instead of blocking on it.
+    while (!process.waitForFinished(50)) {
+        if (process.state() == QProcess::NotRunning) break;
+        if (cancel && cancel->load(std::memory_order_relaxed)) { process.kill(); process.waitForFinished(); return {}; }
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return {};
+    QImage image;
+    image.loadFromData(process.readAllStandardOutput(), "JPEG");
+    return image;
+}

@@ -10,7 +10,11 @@
 #include <QPointer>
 #include <QVariantList>
 #include <QTimer>
+#include <QJsonObject>
+#include <QProcess>
 #include "writer.h"
+#include "edit.h"
+#include "thumbnails.h"
 #include "portalfilepicker.h"
 
 class Backend : public QObject {
@@ -34,6 +38,13 @@ class Backend : public QObject {
     Q_PROPERTY(QUrl clip READ clip NOTIFY changed)
     Q_PROPERTY(QString clipName READ clipName NOTIFY changed)
     Q_PROPERTY(QVariantList recordings READ recordings NOTIFY recordingsChanged)
+    Q_PROPERTY(double saveProgress READ saveProgress NOTIFY changed)
+    Q_PROPERTY(QVariantList clips READ clips NOTIFY editChanged)
+    Q_PROPERTY(QVariantList pauses READ pauses NOTIFY editChanged)
+    Q_PROPERTY(double keptDuration READ keptDuration NOTIFY editChanged)
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY editChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
+    Q_PROPERTY(QObject *thumbnails READ thumbnails CONSTANT)
 public:
     explicit Backend(QObject *parent = nullptr);
     Backend(FilePicker *picker, bool activateHardware, QObject *parent = nullptr);
@@ -57,6 +68,14 @@ public:
     QUrl clip() const { return QUrl::fromLocalFile(m_clipPath); }
     QString clipName() const;
     QVariantList recordings() const { return m_recordings; }
+    double saveProgress() const { return m_saveProgress; }
+    QVariantList clips() const;
+    QVariantList pauses() const;
+    double keptDuration() const { return edit::keptDuration(m_edit); }
+    bool canUndo() const { return !m_undo.isEmpty(); }
+    bool canRedo() const { return !m_redo.isEmpty(); }
+    Thumbnails *thumbnails() { return &m_thumbnails; }
+    edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
     Q_INVOKABLE void selectCamera(int index);
     Q_INVOKABLE void selectMicrophone(int index);
@@ -66,7 +85,16 @@ public:
     Q_INVOKABLE void newRecording();
     Q_INVOKABLE void save();
     Q_INVOKABLE void confirmOverwrite(bool confirmed);
-    Q_INVOKABLE void openInOmacut();
+    // Edits to the finished recording. A gesture (a drag) is one undo step.
+    Q_INVOKABLE void split(double time);
+    Q_INVOKABLE void setClip(int index, double start, double end);
+    Q_INVOKABLE void removeClip(int index);
+    // Joins clip index with the next one, restoring whatever lay between them.
+    Q_INVOKABLE void joinClips(int index);
+    Q_INVOKABLE void beginGesture();
+    Q_INVOKABLE void endGesture();
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
     Q_INVOKABLE void refreshRecordings();
     Q_INVOKABLE void openRecording(const QString &id);
     Q_INVOKABLE void discardRecording(const QString &id);
@@ -79,6 +107,7 @@ signals:
     void devicesChanged();
     void meterChanged();
     void recordingsChanged();
+    void editChanged();
     void safeToClose();
     void overwriteRequested(const QString &path);
 private:
@@ -96,7 +125,12 @@ private:
     void writerFinished();
     void probeClip(const QString &path, bool currentTake);
     void saveTo(const QUrl &url);
+    void writeTo(const QString &destination);
     void copyTo(const QString &destination);
+    void exportTo(const QString &destination);
+    void saved(const QString &destination, const QString &error);
+    void applyEdit(edit::Clips next);
+    void resetEdit(const edit::Clips &clips, const QList<double> &pauses);
     void writeManifest(const QString &status);
     QString recordingDirectory(const QString &id) const;
     void updateReady();
@@ -120,7 +154,16 @@ private:
     QVariantList m_cameras, m_microphones, m_recordings;
     QString m_cameraId, m_audioId, m_state = "starting", m_message, m_formatLabel;
     QString m_root, m_takeId, m_clipPath, m_clipFileName;
-    QString m_interruption;
+    QString m_interruption, m_status;
+    edit::Clips m_edit;
+    QList<edit::Clips> m_undo, m_redo;
+    QList<double> m_pauses;
+    QJsonObject m_storedEdit;
+    Thumbnails m_thumbnails;
+    QProcess *m_export = nullptr;
+    QString m_exportPartial;
+    double m_saveProgress = 0;
+    bool m_gesture = false, m_gestureRecorded = false, m_clipAudio = false;
     qint64 m_lastVideoAt = 0, m_lastAudioAt = 0, m_activatedAt = 0;
     qint64 m_videoOrigin = -1, m_videoBase = 0;
     qint64 m_audioCapturedUntil = -1, m_videoCapturedUntil = -1, m_finishAt = -1;

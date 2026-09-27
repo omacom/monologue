@@ -1,4 +1,5 @@
 <RCC><qresource prefix="/">
 <file>Main.qml</file>
+<file>EditBar.qml</file>
 <file alias="monologue.svg">../pkgbuild/monologue.svg</file>
 </qresource></RCC>
