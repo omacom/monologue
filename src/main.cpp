@@ -13,6 +13,7 @@ int main(int argc,char *argv[]) {
     qputenv("QT_MEDIA_BACKEND","ffmpeg");
     QGuiApplication app(argc,argv);
     app.setApplicationName("monologue");
+    app.setApplicationVersion("0.2.0");
     app.setOrganizationName("omacom");
     app.setDesktopFileName("monologue");
     app.setWindowIcon(QIcon("qrc:/monologue.svg"));
