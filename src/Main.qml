@@ -2,12 +2,13 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import QtQuick.Shapes
 import QtMultimedia
 
 ApplicationWindow {
     id: win
     width: 960; height: 700
-    minimumWidth: 640; minimumHeight: 460
+    minimumWidth: 720; minimumHeight: 460
     visible: true
     title: "monologue"
     color: "#0e0e10"
@@ -67,16 +68,56 @@ ApplicationWindow {
     Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
     Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
+    readonly property color textColor: "#eeeef0"
+    readonly property color dimColor: "#8d8d96"
+    readonly property color faintColor: "#5c5c64"
+    readonly property color recordColor: "#f0605c"
+    readonly property var icons: ({
+        camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
+        microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
+        chevron: "M6 9l6 6 6-6",
+        list: "M4 6h16 M4 12h16 M4 18h10",
+        back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
+        play: "M8 4.5v15l12.5-7.5z",
+        pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z",
+        stop: "M7.5 5.5h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"
+    })
+
+    // 24×24 SVG paths, stroked like line icons unless filled.
+    component Icon: Item {
+        id: icon
+        property string path
+        property color color: win.textColor
+        property bool filled: false
+        implicitWidth: 16; implicitHeight: 16
+        Shape {
+            preferredRendererType: Shape.CurveRenderer
+            scale: icon.width / 24; transformOrigin: Item.TopLeft
+            ShapePath {
+                strokeColor: icon.filled ? "transparent" : icon.color; strokeWidth: icon.filled ? 0 : 1.8
+                fillColor: icon.filled ? icon.color : "transparent"
+                capStyle: ShapePath.RoundCap; joinStyle: ShapePath.RoundJoin
+                PathSvg { path: icon.path }
+            }
+        }
+    }
     component ActionButton: Button {
         id: button
         property bool primary: false
+        property string iconPath: ""
+        property bool iconFilled: false
         padding: 14; topPadding: 10; bottomPadding: 10
         font.pixelSize: 13; font.weight: Font.DemiBold
         focusPolicy: Qt.TabFocus
         implicitHeight: 42
-        contentItem: Text { text: button.text; font: button.font; color: button.primary ? win.accentForeground : "#eeeef0"; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; opacity: button.enabled ? 1 : .4 }
+        readonly property color foreground: button.primary ? win.accentForeground : button.flat && !button.hovered ? win.dimColor : win.textColor
+        contentItem: Row {
+            spacing: 8; opacity: button.enabled ? 1 : .4
+            Icon { visible: button.iconPath !== ""; path: button.iconPath; filled: button.iconFilled; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+            Text { visible: button.text !== ""; text: button.text; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+        }
         background: Rectangle {
-            radius: win.cornerRadius; color: button.primary ? win.accent : button.hovered ? "#3a3a3e" : "#2c2c2f"
+            radius: win.cornerRadius; color: button.primary ? win.accent : button.flat ? (button.hovered ? "#1f1f23" : "transparent") : button.hovered ? "#3a3a3e" : "#2c2c2f"
             opacity: button.enabled ? 1 : .4
             border.width: button.activeFocus ? 2 : 0; border.color: button.primary ? win.accentForeground : win.accent
         }
@@ -103,81 +144,82 @@ ApplicationWindow {
         }
         onClosed: liveVideo.forceActiveFocus()
     }
+    // A source reads as quiet text with an icon; the dropdown appears on click.
     component SourceChoice: ComboBox {
         id: choice
+        property string iconPath
+        property string detail: ""
+        property real maximumTextWidth: 260
         textRole: "label"
         focusPolicy: Qt.TabFocus
-        implicitHeight: 42
+        implicitHeight: 26
+        leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
         font.pixelSize: 13
         Material.accent: win.accent
-        background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.width: 1; border.color: choice.activeFocus ? win.accent : "#39393e"; opacity: choice.enabled ? 1 : .5 }
+        indicator: Item { }
+        background: Item { }
+        contentItem: RowLayout {
+            spacing: 8
+            Icon { path: choice.iconPath; color: win.dimColor }
+            Label {
+                Layout.maximumWidth: choice.maximumTextWidth; elide: Text.ElideRight; font: choice.font
+                text: choice.displayText
+                color: choice.activeFocus ? win.accent : choice.enabled ? (choice.hovered ? "#ffffff" : win.textColor) : win.dimColor
+            }
+            Icon { visible: choice.enabled; path: win.icons.chevron; implicitWidth: 12; implicitHeight: 12; color: win.dimColor }
+        }
+        popup.width: Math.max(280, choice.width)
         popup.background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.color: "#39393e" }
         ToolTip {
             visible: choice.hovered && choice.currentText !== ""
-            text: choice.currentText
+            text: choice.detail !== "" ? choice.currentText + "\n" + choice.detail : choice.currentText
             background: Rectangle { color: "#303037"; radius: win.cornerRadius }
         }
+        HoverHandler { cursorShape: choice.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
+    }
+    // Round shutter: record/resume, pause while recording, play/pause a finished clip.
+    component Shutter: AbstractButton {
+        id: shutter
+        focusPolicy: Qt.TabFocus
+        implicitWidth: 64; implicitHeight: 64
+        readonly property bool recording: backend.state === "recording"
+        readonly property bool playing: player.playbackState === MediaPlayer.PlayingState
+        opacity: enabled ? 1 : .4
+        Rectangle {
+            anchors.fill: parent; radius: width / 2
+            color: win.finished ? (shutter.hovered ? "#34343a" : "#26262a") : "transparent"
+            border.width: win.finished ? (shutter.activeFocus ? 2 : 0) : 3
+            border.color: shutter.activeFocus ? win.accent : shutter.recording ? win.recordColor : win.textColor
+        }
+        Rectangle {
+            visible: !win.finished
+            anchors.centerIn: parent
+            width: shutter.recording ? 22 : 50; height: width
+            radius: shutter.recording ? Math.min(5, win.cornerRadius + 2) : width / 2
+            color: shutter.recording || backend.state === "paused" ? win.recordColor : win.accent
+            scale: shutter.pressed ? .9 : shutter.hovered ? .96 : 1
+            Behavior on width { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
+            Behavior on scale { NumberAnimation { duration: 80 } }
+        }
+        Icon {
+            visible: win.finished; filled: true
+            anchors.centerIn: parent; anchors.horizontalCenterOffset: shutter.playing ? 0 : 2
+            implicitWidth: 24; implicitHeight: 24
+            path: shutter.playing ? win.icons.pause : win.icons.play
+        }
+        Keys.onReturnPressed: clicked()
+        Keys.onEnterPressed: clicked()
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
     }
 
     ColumnLayout {
-        anchors.fill: parent; anchors.margins: 16; spacing: 12
-        RowLayout {
-            Layout.fillWidth: true; spacing: 12
-            ColumnLayout {
-                Layout.fillWidth: true; spacing: 3
-                Label { text: win.finished ? "Recording" : "Camera"; color: "#9999a1"; font.pixelSize: 11 }
-                SourceChoice {
-                    id: cameraChoice; visible: !win.finished
-                    Layout.fillWidth: true
-                    model: backend.cameras; currentIndex: backend.cameraIndex
-                    enabled: !backend.takeActive && !win.busy
-                    onActivated: index => { backend.selectCamera(index); liveVideo.forceActiveFocus() }
-                    Accessible.name: "Camera"
-                }
-                Label { visible: win.finished; text: backend.clipName; Layout.fillWidth: true; elide: Text.ElideMiddle; font.pixelSize: 13 }
-            }
-            ColumnLayout {
-                visible: !win.finished; Layout.fillWidth: true; spacing: 3
-                Label { text: "Microphone"; color: "#9999a1"; font.pixelSize: 11 }
-                SourceChoice {
-                    id: microphoneChoice; Layout.fillWidth: true
-                    model: backend.microphones; currentIndex: backend.microphoneIndex
-                    enabled: !backend.takeActive && !win.busy
-                    onActivated: index => { backend.selectMicrophone(index); liveVideo.forceActiveFocus() }
-                    Accessible.name: "Microphone"
-                }
-            }
-            ActionButton {
-                visible: win.finished; text: "New recording"; enabled: !win.busy && !backend.dialogOpen
-                onClicked: { player.stop(); backend.newRecording(); liveVideo.forceActiveFocus() }
-            }
-            ToolButton {
-                text: "☰"; Accessible.name: "Recordings"; enabled: !backend.takeActive && !win.busy && !backend.dialogOpen
-                onClicked: { player.pause(); backend.refreshRecordings(); recordingsDialog.open() }
-                ToolTip.visible: hovered; ToolTip.text: "Recordings (" + backend.recordings.length + ")"
-            }
-        }
+        anchors.fill: parent; spacing: 0
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
-            color: "black"; radius: win.cornerRadius; clip: true
+            color: "black"; clip: true
             VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
             VideoOutput { id: clipVideo; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
-            Rectangle {
-                anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 14
-                height: 30; width: stateLabel.implicitWidth + 32; radius: win.cornerRadius; color: "#dd17171b"
-                Row {
-                    anchors.centerIn: parent; spacing: 7
-                    Rectangle { width: 7; height: 7; radius: 4; anchors.verticalCenter: parent.verticalCenter; color: backend.state === "recording" ? "#f06c6c" : backend.state === "paused" ? "#e2c77c" : "#a3bd9c" }
-                    Label { id: stateLabel; text: win.finished ? "Preview" : backend.state === "recording" ? "Recording" : backend.state === "paused" ? "Paused" : backend.ready ? "Ready" : win.busy ? "Finishing" : backend.state === "unavailable" ? "Unavailable" : "Connecting"; font.pixelSize: 11; font.family: "monospace" }
-                }
-            }
-            Rectangle {
-                anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 14
-                visible: backend.formatLabel !== ""
-                height: 30; width: formatText.implicitWidth + 20; radius: win.cornerRadius; color: "#dd17171b"
-                Label { id: formatText; anchors.centerIn: parent; text: backend.formatLabel; font.pixelSize: 11; font.family: "monospace" }
-            }
             Column {
                 anchors.centerIn: parent; width: Math.min(400, parent.width-40); spacing: 16
                 visible: backend.state === "unavailable" || backend.state === "starting" || win.busy
@@ -187,79 +229,125 @@ ApplicationWindow {
                 }
                 ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: "Retry"; onClicked: backend.retry() }
             }
-        }
-        RowLayout {
-            Layout.fillWidth: true; spacing: 12
-            ActionButton {
-                id: recordButton
-                text: win.finished ? (player.playbackState === MediaPlayer.PlayingState ? "Ⅱ" : "▶") : backend.state === "recording" ? "Ⅱ  Pause" : backend.state === "paused" ? "●  Resume" : "●  Record"
-                primary: !win.finished && backend.state !== "recording"
-                enabled: !win.busy && !backend.dialogOpen && (win.finished || backend.ready || backend.takeActive)
-                Accessible.name: win.finished ? "Play or pause clip" : text
-                onClicked: { win.space(); liveVideo.forceActiveFocus() }
+            Rectangle {
+                visible: backend.message !== "" && backend.state !== "unavailable" && !win.busy
+                anchors.bottom: parent.bottom; anchors.horizontalCenter: parent.horizontalCenter; anchors.bottomMargin: 16
+                width: Math.min(messageText.implicitWidth + 28, parent.width - 32); height: messageText.implicitHeight + 16
+                radius: win.cornerRadius; color: "#dd141416"
+                Label { id: messageText; anchors.centerIn: parent; width: parent.width - 28; text: backend.message; color: win.accent; font.pixelSize: 12; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter }
             }
-            Label { text: win.time(win.finished ? player.position/1000 : backend.duration); font.family: "monospace"; font.pixelSize: win.width < 760 ? 14 : 18 }
-            ActionButton { visible: backend.takeActive; enabled: !win.busy; text: "■  Finish"; onClicked: { backend.finish(); liveVideo.forceActiveFocus() } }
+        }
+        // Hairline under the frame: the mic level while live, the clip position once finished.
+        Item {
+            Layout.fillWidth: true; implicitHeight: 3; z: 1
+            Rectangle {
+                id: meter; visible: !win.finished; anchors.fill: parent; color: "#1a1a1d"
+                readonly property real fraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.level + 60) / 60)) : 0
+                readonly property real peakFraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.peakLevel + 60) / 60)) : 0
+                Rectangle {
+                    width: meter.fraction * parent.width; height: parent.height
+                    color: backend.clipping || backend.level >= -3 ? win.recordColor : backend.level >= -12 ? "#e2c77c" : "#8fc38a"
+                }
+                Rectangle { visible: meter.peakFraction > 0; x: meter.peakFraction * (parent.width - width); width: 2; height: parent.height; color: backend.clipping ? win.recordColor : "#c9c9d0" }
+                Accessible.role: Accessible.Indicator
+                Accessible.name: "Microphone level: " + backend.meterText
+            }
             Slider {
-                id: seek; visible: win.finished; Layout.fillWidth: true; from: 0; to: player.duration
+                id: seek; visible: win.finished
+                anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                height: 18; padding: 0; from: 0; to: player.duration
                 value: player.position; enabled: !win.busy
+                focusPolicy: Qt.TabFocus
                 background: Rectangle {
-                    x: seek.leftPadding; y: seek.topPadding + seek.availableHeight / 2 - height / 2
-                    width: seek.availableWidth; height: 4; radius: Math.min(2, win.cornerRadius); color: "#39393e"
-                    Rectangle { width: seek.visualPosition * parent.width; height: parent.height; radius: parent.radius; color: win.accent }
+                    y: seek.height / 2 - height / 2; width: seek.width; height: 3; color: "#26262a"
+                    Rectangle { width: seek.visualPosition * parent.width; height: parent.height; color: win.accent }
                 }
                 handle: Rectangle {
-                    x: seek.leftPadding + seek.visualPosition * (seek.availableWidth - width)
-                    y: seek.topPadding + seek.availableHeight / 2 - height / 2
-                    width: 14; height: 20; radius: Math.min(7, win.cornerRadius); color: win.accent
+                    x: seek.visualPosition * (seek.width - width); y: seek.height / 2 - height / 2
+                    width: 12; height: 12; radius: Math.min(6, win.cornerRadius); color: win.accent
+                    visible: seek.hovered || seek.pressed || seek.activeFocus
                     border.width: seek.activeFocus ? 2 : 0; border.color: win.accentForeground
                 }
                 onMoved: player.position = value
                 Accessible.name: "Clip position"
             }
-            Item { visible: !win.finished; Layout.fillWidth: true }
-            ColumnLayout {
-                visible: !win.finished; spacing: 3
-                Layout.preferredWidth: win.width < 760 ? 176 : 224
-                Layout.maximumWidth: win.width < 760 ? 176 : 224
-                Row {
-                    spacing: 3
-                    Repeater {
-                        model: 24
-                        Rectangle {
-                            required property int index
-                            readonly property double threshold: -60 + index * 60 / 24
-                            width: win.width < 760 ? 4 : 6; height: 17; radius: 1
-                            color: backend.audioEnabled && (backend.level >= threshold || Math.abs(backend.peakLevel - threshold) < 2.5) ? (threshold >= -3 ? "#f06c6c" : threshold >= -12 ? "#e2c77c" : "#9fc89b") : "#303037"
-                        }
-                    }
-                    Rectangle { width: 5; height: 17; radius: Math.min(1, win.cornerRadius); color: backend.clipping ? "#f06c6c" : "#303037" }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: "−60"; color: "#777780"; font.pixelSize: 9 }
-                    Item { Layout.fillWidth: true }
-                    Label { text: backend.meterText; color: backend.clipping ? "#f06c6c" : "#aaaab1"; font.pixelSize: 10; font.family: "monospace" }
-                    Item { Layout.fillWidth: true }
-                    Label { text: "0"; color: "#777780"; font.pixelSize: 9 }
-                }
-                Accessible.role: Accessible.Indicator
-                Accessible.name: "Microphone level: " + backend.meterText
-            }
-            ActionButton { visible: win.finished; text: "Save…"; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.save() } }
-            ActionButton { visible: win.finished; text: "Open in Omacut"; primary: true; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.openInOmacut() } }
-        }
-        Label {
-            Layout.fillWidth: true; visible: backend.message !== "" && backend.state !== "unavailable" && !win.busy
-            text: backend.message; color: win.accent; font.pixelSize: 12; wrapMode: Text.WordWrap
         }
         RowLayout {
-            Layout.fillWidth: true
-            Label {
-                Layout.fillWidth: true; elide: Text.ElideRight; color: "#96969f"; font.pixelSize: 11
-                text: win.finished ? "Kept in Recordings until you discard it" : backend.state === "paused" ? "Space to resume · Preview and mic are live" : backend.state === "recording" ? "Space to pause · Ctrl+Enter to finish" : "Space to record · Sources remembered automatically"
+            Layout.fillWidth: true; Layout.preferredHeight: 104; Layout.maximumHeight: 104
+            Layout.leftMargin: 22; Layout.rightMargin: 16; spacing: 16
+            Item {
+                Layout.fillWidth: true; Layout.preferredWidth: 1; implicitHeight: 64
+                ColumnLayout {
+                    id: sources; visible: !win.finished; spacing: 2
+                    anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width
+                    SourceChoice {
+                        id: cameraChoice; iconPath: win.icons.camera; detail: backend.formatLabel
+                        maximumTextWidth: Math.min(260, sources.width - 44)
+                        model: backend.cameras; currentIndex: backend.cameraIndex
+                        enabled: !backend.takeActive && !win.busy
+                        onActivated: index => { backend.selectCamera(index); liveVideo.forceActiveFocus() }
+                        Accessible.name: "Camera"
+                    }
+                    SourceChoice {
+                        id: microphoneChoice; iconPath: win.icons.microphone
+                        maximumTextWidth: Math.min(260, sources.width - 44)
+                        model: backend.microphones; currentIndex: backend.microphoneIndex
+                        enabled: !backend.takeActive && !win.busy
+                        onActivated: index => { backend.selectMicrophone(index); liveVideo.forceActiveFocus() }
+                        Accessible.name: "Microphone"
+                    }
+                }
+                ActionButton {
+                    visible: win.finished; flat: true; iconPath: win.icons.back; text: "New recording"
+                    anchors.left: parent.left; anchors.leftMargin: -14; anchors.verticalCenter: parent.verticalCenter
+                    enabled: !win.busy && !backend.dialogOpen
+                    onClicked: { player.stop(); backend.newRecording(); liveVideo.forceActiveFocus() }
+                }
             }
-            ActionButton { text: "?"; padding: 0; implicitHeight: 24; implicitWidth: 24; onClicked: helpDialog.open(); Accessible.name: "Keyboard shortcuts" }
+            RowLayout {
+                spacing: 18
+                Label {
+                    Layout.preferredWidth: 90; horizontalAlignment: Text.AlignRight
+                    text: win.time(win.finished ? player.position/1000 : backend.duration)
+                    font.family: "monospace"; font.pixelSize: win.finished ? 13 : 18
+                    color: win.finished ? win.dimColor : backend.state === "recording" ? win.textColor : backend.takeActive ? win.dimColor : win.faintColor
+                }
+                Shutter {
+                    id: recordButton
+                    enabled: !win.busy && !backend.dialogOpen && (win.finished || backend.ready || backend.takeActive)
+                    Accessible.name: win.finished ? "Play or pause clip" : backend.state === "recording" ? "Pause" : backend.state === "paused" ? "Resume" : "Record"
+                    onClicked: { win.space(); liveVideo.forceActiveFocus() }
+                }
+                Item {
+                    Layout.preferredWidth: 90; implicitHeight: 36
+                    ActionButton {
+                        visible: backend.takeActive; enabled: !win.busy
+                        anchors.verticalCenter: parent.verticalCenter
+                        implicitHeight: 36; padding: 12; iconPath: win.icons.stop; iconFilled: true; text: "Finish"
+                        onClicked: { backend.finish(); liveVideo.forceActiveFocus() }
+                    }
+                    Label {
+                        visible: win.finished; anchors.verticalCenter: parent.verticalCenter
+                        text: win.time(player.duration/1000); font.family: "monospace"; font.pixelSize: 13; color: win.dimColor
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
+                Item { Layout.fillWidth: true }
+                ToolButton {
+                    id: recordingsButton; Accessible.name: "Recordings"
+                    enabled: !backend.takeActive && !win.busy && !backend.dialogOpen
+                    opacity: enabled ? 1 : .4
+                    implicitWidth: 40; implicitHeight: 40
+                    contentItem: Item { Icon { anchors.centerIn: parent; path: win.icons.list; color: recordingsButton.hovered ? win.textColor : win.dimColor } }
+                    onClicked: { player.pause(); backend.refreshRecordings(); recordingsDialog.open() }
+                    ToolTip.visible: hovered; ToolTip.text: "Recordings (" + backend.recordings.length + ")"
+                }
+                ActionButton { visible: win.finished; text: "Save"; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.save() } }
+                ActionButton { visible: win.finished; text: "Open in Omacut"; primary: true; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.openInOmacut() } }
+            }
         }
     }
     MediaPlayer {
