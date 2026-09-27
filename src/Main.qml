@@ -27,10 +27,67 @@ ApplicationWindow {
         var s = Math.max(0, Math.floor(seconds))
         return (s >= 3600 ? Math.floor(s/3600) + ":" : "") + String(Math.floor(s/60)%60).padStart(2,"0") + ":" + String(s%60).padStart(2,"0")
     }
+    function preciseTime(seconds) {
+        var cs = Math.round(Math.max(0, seconds) * 100)
+        var m = Math.floor(cs / 6000), s = (cs - m * 6000) / 100
+        return String(m).padStart(2, "0") + ":" + s.toFixed(2).padStart(5, "0")
+    }
+    // Where playback continues from t: t itself inside a clip, else the next
+    // clip's start; -1 past the last clip.
+    function playableFrom(t) {
+        var clips = backend.clips
+        for (var i = 0; i < clips.length; ++i)
+            if (t < clips[i].end - 0.03) return Math.max(t, clips[i].start)
+        return -1
+    }
+    function seekTo(t) {
+        t = Math.max(0, Math.min(t, backend.duration))
+        editBar.playheadSec = t
+        player.position = Math.round(t * 1000)
+    }
     function togglePlayback() {
         if (playbackOutput === null) playbackOutput = playbackAudio.createObject(win)
-        if (player.playbackState === MediaPlayer.PlayingState) player.pause()
-        else { if(player.position >= player.duration - 50) player.position = 0; player.play() }
+        if (player.playbackState === MediaPlayer.PlayingState) { player.pause(); return }
+        var from = playableFrom(editBar.playheadSec)
+        seekTo(from < 0 ? backend.clips[0].start : from)
+        player.play()
+    }
+    // The gap before clip n; n equal to the clip count is the tail after the last clip.
+    function gapAt(t) {
+        var n = 0
+        while (n < backend.clips.length && backend.clips[n].end <= t) ++n
+        return n
+    }
+    function restoreGap(gap) {
+        var clips = backend.clips
+        if (gap === 0) backend.setClip(0, 0, clips[0].end)
+        else if (gap === clips.length) backend.setClip(gap - 1, clips[gap - 1].start, backend.duration)
+        else backend.joinClips(gap - 1)
+    }
+    function removeOrRestore() {
+        var i = editBar.clipAt(editBar.playheadSec)
+        if (i >= 0) backend.removeClip(i)
+        else restoreGap(gapAt(editBar.playheadSec))
+    }
+    // Moves an edge of the clip under the playhead to it; in a gap, the neighbouring clip grows.
+    function trimToPlayhead(start) {
+        var t = editBar.playheadSec, clips = backend.clips
+        var i = editBar.clipAt(t)
+        if (i < 0) i = start ? gapAt(t) : gapAt(t) - 1
+        if (i < 0 || i >= clips.length) return
+        if (start) backend.setClip(i, t, clips[i].end)
+        else backend.setClip(i, clips[i].start, t)
+    }
+    function jumpToPause(direction) {
+        var marks = backend.pauses.slice()
+        for (var c = 0; c < backend.clips.length; ++c) marks.push(backend.clips[c].start, backend.clips[c].end)
+        marks.sort((a, b) => a - b)
+        var t = editBar.playheadSec, target = direction > 0 ? marks[marks.length - 1] : marks[0]
+        for (var i = 0; i < marks.length; ++i) {
+            if (direction > 0 && marks[i] > t + 0.01) { target = marks[i]; break }
+            if (direction < 0 && marks[i] < t - 0.01) target = marks[i]
+        }
+        player.pause(); seekTo(target)
     }
     function space() { if (finished) togglePlayback(); else backend.toggleRecording() }
     function closeSafely() {
@@ -57,14 +114,32 @@ ApplicationWindow {
         enabled: !win.overlayOpen && !cameraChoice.popup.visible && !microphoneChoice.popup.visible && !win.controlFocused && !win.busy
         onActivated: win.space()
     }
-    Shortcut { sequence: "Ctrl+Return"; context: Qt.WindowShortcut; autoRepeat: false; enabled: backend.takeActive && !win.busy && !win.overlayOpen; onActivated: backend.finish() }
-    Shortcut { sequence: "Ctrl+Enter"; context: Qt.WindowShortcut; autoRepeat: false; enabled: backend.takeActive && !win.busy && !win.overlayOpen; onActivated: backend.finish() }
+    // Stopping ends the take and opens it for editing.
+    Shortcut { sequences: ["Ctrl+Return", "Ctrl+Enter"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: backend.takeActive && !win.busy && !win.overlayOpen; onActivated: backend.finish() }
+    Shortcut { sequences: ["Return", "Enter"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: backend.takeActive && !win.busy && !win.overlayOpen && !win.controlFocused; onActivated: backend.finish() }
     Shortcut { sequence: "Ctrl+S"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.finished && !win.busy && !win.overlayOpen; onActivated: { player.pause(); backend.save() } }
     Shortcut {
         sequence: "Escape"; context: Qt.WindowShortcut; autoRepeat: false
         enabled: (backend.takeActive || win.finished) && !win.busy && !win.overlayOpen && !cameraChoice.popup.visible && !microphoneChoice.popup.visible
         onActivated: { player.pause(); restartDialog.open() }
     }
+    // Editing the finished clip.
+    readonly property bool editing: win.finished && !win.busy && !win.overlayOpen && !editBar.interacting
+    Shortcut { sequence: "Left"; context: Qt.WindowShortcut; enabled: win.editing && !win.controlFocused; onActivated: win.seekTo(editBar.playheadSec - 1) }
+    Shortcut { sequence: "Right"; context: Qt.WindowShortcut; enabled: win.editing && !win.controlFocused; onActivated: win.seekTo(editBar.playheadSec + 1) }
+    Shortcut { sequence: "Shift+Left"; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.seekTo(editBar.playheadSec - 5) }
+    Shortcut { sequence: "Shift+Right"; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.seekTo(editBar.playheadSec + 5) }
+    Shortcut { sequence: "Alt+Left"; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.seekTo(editBar.playheadSec - 0.2) }
+    Shortcut { sequence: "Alt+Right"; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.seekTo(editBar.playheadSec + 0.2) }
+    Shortcut { sequence: "["; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.jumpToPause(-1) }
+    Shortcut { sequence: "]"; context: Qt.WindowShortcut; enabled: win.editing; onActivated: win.jumpToPause(1) }
+    Shortcut { sequence: "S"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: backend.split(editBar.playheadSec) }
+    Shortcut { sequences: ["X", "Delete", "Backspace"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing && !win.controlFocused; onActivated: win.removeOrRestore() }
+    Shortcut { sequence: "Ctrl+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(true) }
+    Shortcut { sequence: "Alt+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(false) }
+    Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
+    Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
+    Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
     Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
     Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
@@ -177,12 +252,28 @@ ApplicationWindow {
         }
         HoverHandler { cursorShape: choice.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
     }
-    // Round shutter: record/resume, pause while recording, play/pause a finished clip.
+    component ShortcutList: GridLayout {
+        id: list
+        property string heading
+        property var rows: []
+        columns: 2; columnSpacing: 16; rowSpacing: 6
+        Label { Layout.columnSpan: 2; Layout.bottomMargin: 4; text: list.heading; font.pixelSize: 14; font.weight: Font.DemiBold }
+        Repeater {
+            model: list.rows.length * 2
+            Label {
+                required property int index
+                text: list.rows[Math.floor(index / 2)][index % 2]; font.pixelSize: 13
+                font.family: index % 2 ? Qt.application.font.family : "monospace"
+                color: index % 2 ? win.textColor : win.accent
+            }
+        }
+    }
+    // Round shutter: record, stop a take, play/pause a finished clip.
     component Shutter: AbstractButton {
         id: shutter
         focusPolicy: Qt.TabFocus
         implicitWidth: 64; implicitHeight: 64
-        readonly property bool recording: backend.state === "recording"
+        readonly property bool recording: backend.takeActive
         readonly property bool playing: player.playbackState === MediaPlayer.PlayingState
         opacity: enabled ? 1 : .4
         Rectangle {
@@ -196,7 +287,7 @@ ApplicationWindow {
             anchors.centerIn: parent
             width: shutter.recording ? 22 : 50; height: width
             radius: shutter.recording ? Math.min(5, win.cornerRadius + 2) : width / 2
-            color: shutter.recording || backend.state === "paused" ? win.recordColor : win.accent
+            color: shutter.recording ? win.recordColor : win.accent
             scale: shutter.pressed ? .9 : shutter.hovered ? .96 : 1
             Behavior on width { NumberAnimation { duration: 120; easing.type: Easing.OutCubic } }
             Behavior on scale { NumberAnimation { duration: 80 } }
@@ -218,14 +309,14 @@ ApplicationWindow {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
             VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
-            VideoOutput { id: clipVideo; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
+            VideoOutput { id: clipVideo; objectName: "clipVideo"; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
             Column {
                 anchors.centerIn: parent; width: Math.min(400, parent.width-40); spacing: 16
                 visible: backend.state === "unavailable" || backend.state === "starting" || win.busy
                 Label {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 15
-                    text: win.busy ? (backend.state === "saving" ? "Saving your clip…" : "Finishing your clip…") : backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
+                    text: win.busy ? (backend.state === "saving" ? "Saving your clip…" + (backend.saveProgress > 0 ? " " + Math.floor(backend.saveProgress * 100) + "%" : "") : "Finishing your clip…") : backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
                 }
                 ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: "Retry"; onClicked: backend.retry() }
             }
@@ -252,24 +343,18 @@ ApplicationWindow {
                 Accessible.role: Accessible.Indicator
                 Accessible.name: "Microphone level: " + backend.meterText
             }
-            Slider {
-                id: seek; visible: win.finished
-                anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                height: 18; padding: 0; from: 0; to: player.duration
-                value: player.position; enabled: !win.busy
-                focusPolicy: Qt.TabFocus
-                background: Rectangle {
-                    y: seek.height / 2 - height / 2; width: seek.width; height: 3; color: "#26262a"
-                    Rectangle { width: seek.visualPosition * parent.width; height: parent.height; color: win.accent }
-                }
-                handle: Rectangle {
-                    x: seek.visualPosition * (seek.width - width); y: seek.height / 2 - height / 2
-                    width: 12; height: 12; radius: Math.min(6, win.cornerRadius); color: win.accent
-                    visible: seek.hovered || seek.pressed || seek.activeFocus
-                    border.width: seek.activeFocus ? 2 : 0; border.color: win.accentForeground
-                }
-                onMoved: player.position = value
-                Accessible.name: "Clip position"
+        }
+        Item {
+            visible: win.finished; z: 1
+            Layout.fillWidth: true; Layout.topMargin: 16; Layout.leftMargin: 16; Layout.rightMargin: 16
+            implicitHeight: editBar.implicitHeight
+            EditBar {
+                id: editBar; objectName: "editBar"
+                anchors.fill: parent
+                enabled: !win.busy
+                accent: win.accent; accentForeground: win.accentForeground
+                cornerRadius: win.cornerRadius
+                onScrub: seconds => { player.pause(); player.position = Math.round(seconds * 1000) }
             }
         }
         RowLayout {
@@ -309,27 +394,48 @@ ApplicationWindow {
                 spacing: 18
                 Label {
                     Layout.preferredWidth: 90; horizontalAlignment: Text.AlignRight
-                    text: win.time(win.finished ? player.position/1000 : backend.duration)
+                    text: win.finished ? win.preciseTime(editBar.playheadSec) : win.time(backend.duration)
                     font.family: "monospace"; font.pixelSize: win.finished ? 13 : 18
                     color: win.finished ? win.dimColor : backend.state === "recording" ? win.textColor : backend.takeActive ? win.dimColor : win.faintColor
                 }
                 Shutter {
                     id: recordButton
                     enabled: !win.busy && !backend.dialogOpen && (win.finished || backend.ready || backend.takeActive)
-                    Accessible.name: win.finished ? "Play or pause clip" : backend.state === "recording" ? "Pause" : backend.state === "paused" ? "Resume" : "Record"
-                    onClicked: { win.space(); liveVideo.forceActiveFocus() }
+                    Accessible.name: win.finished ? "Play or pause clip" : backend.takeActive ? "Stop" : "Record"
+                    onClicked: {
+                        if (win.finished) win.togglePlayback()
+                        else if (backend.takeActive) backend.finish()
+                        else backend.toggleRecording()
+                        liveVideo.forceActiveFocus()
+                    }
                 }
                 Item {
                     Layout.preferredWidth: 90; implicitHeight: 36
-                    ActionButton {
+                    RoundButton {
+                        id: pauseButton
                         visible: backend.takeActive; enabled: !win.busy
                         anchors.verticalCenter: parent.verticalCenter
-                        implicitHeight: 36; padding: 12; iconPath: win.icons.stop; iconFilled: true; text: "Finish"
-                        onClicked: { backend.finish(); liveVideo.forceActiveFocus() }
+                        width: 40; height: 40; padding: 0; flat: true
+                        focusPolicy: Qt.TabFocus
+                        readonly property bool paused: backend.state === "paused"
+                        Accessible.name: paused ? "Resume" : "Pause"
+                        ToolTip.visible: hovered; ToolTip.text: (paused ? "Resume" : "Pause") + " (Space)"
+                        background: Rectangle {
+                            radius: width / 2; color: pauseButton.hovered ? "#34343a" : "#26262a"
+                            border.width: pauseButton.activeFocus ? 2 : 0; border.color: win.accent
+                        }
+                        contentItem: Item {
+                            Icon { visible: !pauseButton.paused; anchors.centerIn: parent; filled: true; path: win.icons.pause }
+                            Rectangle { visible: pauseButton.paused; anchors.centerIn: parent; width: 14; height: 14; radius: 7; color: win.recordColor }
+                        }
+                        onClicked: { backend.toggleRecording(); liveVideo.forceActiveFocus() }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                     Label {
                         visible: win.finished; anchors.verticalCenter: parent.verticalCenter
-                        text: win.time(player.duration/1000); font.family: "monospace"; font.pixelSize: 13; color: win.dimColor
+                        text: win.preciseTime(backend.keptDuration); font.family: "monospace"; font.pixelSize: 13; color: win.dimColor
+                        ToolTip.visible: keptHover.hovered; ToolTip.text: "Length of all clips"
+                        HoverHandler { id: keptHover }
                     }
                 }
             }
@@ -345,8 +451,7 @@ ApplicationWindow {
                     onClicked: { player.pause(); backend.refreshRecordings(); recordingsDialog.open() }
                     ToolTip.visible: hovered; ToolTip.text: "Recordings (" + backend.recordings.length + ")"
                 }
-                ActionButton { visible: win.finished; text: "Save"; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.save() } }
-                ActionButton { visible: win.finished; text: "Open in Omacut"; primary: true; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.openInOmacut() } }
+                ActionButton { visible: win.finished; text: "Save"; primary: true; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.save() } }
             }
         }
     }
@@ -354,18 +459,36 @@ ApplicationWindow {
         id: player; source: win.finished ? backend.clip : ""
         videoOutput: clipVideo
         audioOutput: win.playbackOutput
+        // Play only the clips: hop over gaps and stop after the last clip.
+        onPositionChanged: {
+            if (playbackState === MediaPlayer.PlayingState) {
+                var t = position / 1000, next = win.playableFrom(t)
+                if (next < 0) { pause(); win.seekTo(backend.clips[backend.clips.length - 1].end); return }
+                if (next - t > 0.05) { position = Math.round(next * 1000); return }
+            }
+            if (!editBar.interacting) editBar.playheadSec = position / 1000
+        }
+        // Show the first kept frame rather than black until Play, once per clip.
+        property bool primed: false
+        onSourceChanged: { editBar.playheadSec = 0; primed = false }
+        onMediaStatusChanged: {
+            if (!primed && mediaStatus === MediaPlayer.LoadedMedia && backend.clips.length > 0) {
+                primed = true
+                pause(); win.seekTo(backend.clips[0].start)
+            }
+        }
     }
     Component { id: playbackAudio; AudioOutput {} }
     ThemedDialog {
-        id: closeDialog; anchors.centerIn: parent; modal: true; title: "Finish this recording?"
+        id: closeDialog; anchors.centerIn: parent; modal: true; title: "Stop this recording?"
         closePolicy: Popup.CloseOnEscape
         ColumnLayout {
             spacing: 16
-            Label { text: "Finish and keep the clip before closing, or keep recording."; wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
+            Label { text: "Stop and keep the clip in Recordings before closing, or keep recording."; wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
             RowLayout {
                 ActionButton { text: "Keep recording"; onClicked: closeDialog.close() }
                 ActionButton { text: "Discard"; onClicked: { closeDialog.close(); backend.discardAndClose() } }
-                ActionButton { text: "Finish and keep"; primary: true; onClicked: { closeDialog.close(); backend.finishAndClose() } }
+                ActionButton { text: "Stop and keep"; primary: true; onClicked: { closeDialog.close(); backend.finishAndClose() } }
             }
         }
     }
@@ -402,7 +525,7 @@ ApplicationWindow {
         id: discardDialog; anchors.centerIn: parent; modal: true; title: "Discard this recording?"
         width: Math.min(win.width-40,460)
         standardButtons: Dialog.Cancel | Dialog.Discard
-        Label { width: parent.width; text: "This deletes the original from Recordings. Any Omacut window using it will lose its source. Saved copies are kept."; wrapMode: Text.WordWrap }
+        Label { width: parent.width; text: "This deletes the original from Recordings. Saved copies are kept."; wrapMode: Text.WordWrap }
         onDiscarded: { player.stop(); backend.discardRecording(win.discardId) }
     }
     ThemedDialog {
@@ -443,6 +566,19 @@ ApplicationWindow {
     }
     ThemedDialog {
         id: helpDialog; anchors.centerIn: parent; modal: true; title: "Keyboard shortcuts"; standardButtons: Dialog.Close
-        Label { text: "Space     Record / pause / resume; play a finished clip\nCtrl+Enter     Finish this take\nCtrl+S     Save the finished clip\nEsc     Discard this clip and start over (asks first)\nQ     Quit\n?     Show shortcuts\n\nTab between controls; Space activates a focused control."; lineHeight: 1.5; font.pixelSize: 13 }
+        RowLayout {
+            spacing: 40
+            ShortcutList {
+                Layout.alignment: Qt.AlignTop; heading: "Recording"
+                rows: [["Space", "Record / pause / resume"], ["Enter", "Stop and edit"], ["Esc", "Discard and start over"], ["Q", "Quit"], ["?", "Show shortcuts"]]
+            }
+            ShortcutList {
+                Layout.alignment: Qt.AlignTop; heading: "Editing"
+                rows: [["Space", "Play / pause"], ["← →", "Move 1 s (Shift 5 s, Alt 0.2 s)"], ["[ ]", "Previous / next pause or clip edge"],
+                       ["S", "Split the clip at the playhead"], ["X", "Remove the clip, or restore the gap"],
+                       ["Ctrl+Space", "Clip start to playhead"], ["Alt+Space", "Clip end to playhead"],
+                       ["Ctrl+Z", "Undo (Ctrl+Shift+Z redo)"], ["Z", "Zoom to the clip"], ["Ctrl+S", "Save"], ["Esc", "Discard and start over"]]
+            }
+        }
     }
 }

@@ -67,6 +67,12 @@ QList<TakeClock::Span> TakeClock::spans(qint64 begin, qint64 end) const {
     }
     return result;
 }
+QList<qint64> TakeClock::joins() const {
+    QList<qint64> result;
+    for (int i = 1; i < m_intervals.size(); ++i)
+        if (m_intervals[i].position > 0 && (result.isEmpty() || result.last() != m_intervals[i].position)) result.append(m_intervals[i].position);
+    return result;
+}
 
 Writer::Writer(QObject *parent) : QObject(parent) {
     m_session.setRecorder(&m_recorder);

@@ -54,6 +54,25 @@ private slots:
         QCOMPARE(parts[0].end,6000000);
         QCOMPARE(parts[1].position,5000000);
         QCOMPARE(parts[1].begin,16000000);
+        QCOMPARE(c.joins(),QList<qint64>{5000000});
+    }
+    void editModel() {
+        using namespace edit;
+        auto clips=normalized({{6,7},{0,2},{1.5,4},{4.02,4.5},{9.97,12}},10);
+        // Overlaps resolve, hairline gaps close, and slivers vanish.
+        QCOMPARE(clips.size(),4);
+        QCOMPARE(clips[0],(Range{0,2})); QCOMPARE(clips[1],(Range{2,4})); QCOMPARE(clips[2],(Range{4,4.5})); QCOMPARE(clips[3],(Range{6,7}));
+        const auto parts=kept(clips);
+        QCOMPARE(parts.size(),2); QCOMPARE(parts[0],(Range{0,4.5})); QCOMPARE(parts[1],(Range{6,7}));
+        QCOMPARE(keptDuration(clips),5.5);
+        QVERIFY(untouched(whole(10),10)); QVERIFY(untouched({{0,4},{4,10}},10)); QVERIFY(!untouched(clips,10));
+        QCOMPARE(fromJson(toJson({{1,3},{5,8}}),10),(Clips{{1,3},{5,8}}));
+        QCOMPARE(fromJson({},10),whole(10));
+        QCOMPARE(fromJson(toJson({{4,4.05}}),10),whole(10));
+        const auto args=media::exportArgs("in.mp4","out.mp4",{{0,2},{3,4.5}},true);
+        QVERIFY(args.contains("[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[v][a]"));
+        QCOMPARE(args.count("-i"),2);
+        QVERIFY(media::exportArgs("in.mp4","out.mp4",{{0,2}},false).contains("[0:v:0]concat=n=1:v=1:a=0[v]"));
     }
     void meterAllChannels() {
         QAudioFormat f; f.setSampleRate(48000); f.setChannelCount(2); f.setSampleFormat(QAudioFormat::Int16);
@@ -199,6 +218,72 @@ private slots:
         backend.discardCurrent(); QVERIFY(!QFile::exists(original)); QVERIFY(QFile::exists(saved+".mp4"));
         QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.takeActive());
         QCOMPARE(backend.recordings().size(),0);
+    }
+    void editingAndExport() {
+        const auto root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings";
+        const QString id="00000000-0000-0000-0000-000000000002";
+        const auto directory=root+"/"+id;
+        QVERIFY(QDir().mkpath(directory));
+        QVERIFY(QFile::copy(fixture.filePath("fixture.mp4"),directory+"/take.mp4"));
+        QFile manifest(directory+"/take.json"); QVERIFY(manifest.open(QIODevice::WriteOnly));
+        manifest.write("{\"filename\":\"take.mp4\",\"status\":\"complete\",\"pauses\":[1.0]}"); manifest.close();
+        auto *picker=new FakePicker;
+        {
+            Backend backend(picker,false);
+            QTRY_VERIFY(!backend.recordings().isEmpty());
+            backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
+            QCOMPARE(backend.pauses(),QVariantList{1.0});
+            QTRY_COMPARE_WITH_TIMEOUT(backend.thumbnails()->ready(),Thumbnails::Count,20000);
+            QVERIFY(!backend.thumbnails()->store()->get(0).isNull() && backend.thumbnails()->store()->get(0).height()==90);
+            const double d=backend.duration();
+            QVERIFY(!backend.canUndo()); QCOMPARE(backend.clips().size(),1);
+            auto clip=[&](int i,const char *edge) { return backend.clips()[i].toMap()[edge].toDouble(); };
+            // Split, then drag the first clip's end and the second's start apart: one undo step per drag.
+            backend.split(0.5); backend.split(1.5); QCOMPARE(backend.clips().size(),3);
+            backend.split(1.55); QCOMPARE(backend.clips().size(),3);
+            backend.removeClip(1); QCOMPARE(backend.clips().size(),2);
+            QVERIFY(std::abs(backend.keptDuration()-(d-1))<.001);
+            backend.undo(); QCOMPARE(backend.clips().size(),3);
+            backend.beginGesture(); backend.setClip(1,0.4,1.5); backend.setClip(1,0.8,1.5); backend.endGesture();
+            // Clips never overlap their neighbours.
+            QCOMPARE(clip(1,"start"),0.8);
+            backend.setClip(0,0,1); QCOMPARE(clip(0,"end"),0.8);
+            backend.undo(); backend.undo(); QCOMPARE(clip(1,"start"),0.5); QVERIFY(backend.canUndo());
+            backend.redo(); QCOMPARE(clip(1,"start"),0.8);
+            backend.joinClips(0); QCOMPARE(backend.clips().size(),2); QCOMPARE(clip(0,"end"),1.5);
+            backend.undo();
+            // The middle clip goes: 0–0.5 and 1.5–end survive.
+            backend.removeClip(1);
+            backend.removeClip(0); backend.removeClip(0); QCOMPARE(backend.clips().size(),1);
+            backend.undo(); QCOMPARE(backend.clips().size(),2);
+            QVERIFY(std::abs(backend.keptDuration()-(d-1))<.001);
+        }
+        // Edits live in the manifest, so reopening a take restores them.
+        Backend backend(new FakePicker,false);
+        QTRY_VERIFY(!backend.recordings().isEmpty());
+        backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
+        QCOMPARE(backend.clips().size(),2); QVERIFY(!backend.canUndo());
+        const auto kept=backend.keptDuration();
+        const auto saved=fixture.filePath("edited.mp4");
+        Backend exporter(picker=new FakePicker,false);
+        QTRY_VERIFY(!exporter.recordings().isEmpty());
+        exporter.openRecording(id); QTRY_COMPARE(exporter.state(),QString("finished"));
+        exporter.save(); picker->choose(QUrl::fromLocalFile(saved));
+        QCOMPARE(exporter.state(),QString("saving"));
+        QTRY_COMPARE_WITH_TIMEOUT(exporter.state(),QString("finished"),30000);
+        QVERIFY2(exporter.message().startsWith("Saved to"),qPrintable(exporter.message()));
+        const auto p=media::probe(saved); QVERIFY2(p.ok,qPrintable(p.error));
+        QVERIFY(p.audio); QCOMPARE(p.size,QSize(320,240));
+        QVERIFY2(std::abs(p.duration-kept)<.1,qPrintable(QString("%1 vs %2").arg(p.duration).arg(kept)));
+        // The first half second is red and what follows the cut is blue.
+        QProcess pixels;
+        pixels.start("ffmpeg",{"-v","error","-i",saved,"-an","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
+        QVERIFY(pixels.waitForFinished()); const auto rgb=pixels.readAllStandardOutput();
+        QVERIFY(rgb.size()>=6);
+        QVERIFY(quint8(rgb[0])>180 && quint8(rgb[2])<80);
+        QVERIFY(quint8(rgb[rgb.size()-3])<80 && quint8(rgb[rgb.size()-1])>180);
+        QVERIFY(!QDir(fixture.path()).entryList(QDir::Hidden|QDir::Files).join(",").contains("partial"));
+        backend.discardRecording(id);
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;

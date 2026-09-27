@@ -1,13 +1,14 @@
 # Monologue
 
-A simple webcam recorder for Omarchy. Choose your camera and microphone once, then press **Space** to record. Press again to pause or resume the same take. **Finish** gives you a clip to save or open directly in Omacut.
+A simple webcam recorder for Omarchy. Choose your camera and microphone once, then press **Space** to record. Press again to pause or resume the same take. Stop the take and it opens right away in a built-in editor: trim either end, cut ranges out of the middle, then **Save**.
 
 - Remembers camera and microphone by device ID; missing inputs never silently switch.
 - Automatically selects the camera's maximum advertised video resolution, preferring 30 fps at that resolution. Preview preserves the whole frame.
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
-- H.264 MP4 with AAC audio, retained originals, atomic Save, and direct Omacut handoff.
+- Built-in editing: split the take into clips on an Omacut-style filmstrip, trim each clip with its handles, see where you paused, and undo. Edits never touch the original.
+- H.264 MP4 with AAC audio, retained originals, and atomic Save.
 
 ## Build and run
 
@@ -18,7 +19,7 @@ Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia
 ./build/monologue
 ```
 
-The save dialog requires `xdg-desktop-portal` and your desktop's portal backend. Install `omacut` to use **Open in Omacut**. Monologue uses Qt's FFmpeg multimedia backend for timestamped capture; the binary selects it automatically.
+The save dialog requires `xdg-desktop-portal` and your desktop's portal backend. Monologue uses Qt's FFmpeg multimedia backend for timestamped capture; the binary selects it automatically.
 
 To build and install the Arch package:
 
@@ -30,20 +31,37 @@ To build and install the Arch package:
 
 | Key | Action |
 | --- | --- |
-| Space | Record / pause / resume; play / pause a finished clip |
-| Ctrl+Enter | Finish the take |
-| Ctrl+S | Save a finished clip |
-| Esc | Confirm discarding the current clip and start over |
-| Q | Quit (offers to finish an active take) |
+| Space | Record / pause / resume; play / pause while editing |
+| Enter or Ctrl+Enter | Stop the take and edit it |
+| Esc | Confirm discarding the clip and start over |
+| Q | Quit (offers to stop and keep an active take) |
 | ? | Keyboard help |
 
-Tab focuses controls; Space activates a focused control normally. Capture shortcuts stop while dialogs and source dropdowns are open. Selectors stay locked through a take, including pauses.
+The shutter button records and stops; the round button beside it pauses and resumes.
 
-The discard confirmation focuses Confirm immediately: press Escape then Return to start over. Tab or Left/Right selects Cancel; Escape also cancels. Corner rounding updates live through `hyprctl`; outside Hyprland, controls default to square corners.
+While editing, the timeline shows your take as one or more clips, each framed with a handle at both ends. Whatever falls outside every clip is cut.
+
+- **Double-click a clip** to split it there. Splits catch on pause marks.
+- **Drag a handle** to trim that clip. Dragging the handles at a split apart removes the part between them.
+- **Double-click a gap**, or the line between two touching clips, to join them again.
+- **Hover a clip** and click its **×** to remove it.
+
+Handles catch on pause marks, neighbouring clips, and the playhead. Playback plays the clips in order and skips the gaps.
+
+| Key | Action |
+| --- | --- |
+| Left / Right | Move the playhead 1 second (Shift: 5 s, Alt: 0.2 s) |
+| [ / ] | Jump to the previous / next pause or clip edge |
+| S | Split the clip at the playhead |
+| X, Delete | Remove the clip under the playhead; in a gap, restore it |
+| Ctrl+Space / Alt+Space | Move the start / end of the clip under the playhead to the playhead |
+| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
+| Z | Zoom to the clip under the playhead; again to zoom out |
+| Ctrl+S | Save |
 
 ## Recordings and settings
 
-Recordings stay in the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`. The **Recordings** menu lists completed and interrupted takes, their sizes, and actions to reopen, inspect files, or discard them. Recovery never interrupts startup. Save copies the original without re-encoding. Closing Monologue or opening Omacut does not delete it; only explicit Discard deletes the original.
+Recordings stay in the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`. The **Recordings** menu lists completed and interrupted takes, their sizes, and actions to reopen, inspect files, or discard them. Recovery never interrupts startup. Edits and pause marks are kept with each take, so reopening one restores its clips. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden file beside the destination, then renamed into place. Closing Monologue does not delete the original; only explicit Discard does.
 
 Device IDs and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
 
@@ -55,7 +73,7 @@ A disconnected source or encoder error stops the take and preserves its files. A
 ./bin/test
 ```
 
-Tests cover format ranking, pause timing, PCM levels, atomic saving, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
+Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, edit persistence, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
 
 The recording engine forwards native camera frames and one shared microphone PCM stream to timestamped Qt inputs. Microphone timestamps account for the audio server's measured capture latency, including buffered samples. The writer removes paused intervals by capture time and accepts delayed samples from before Pause or Finish. Finish briefly waits for those samples before closing the recording. Qt's audio encoder counts samples, so the writer pads genuine capture gaps and trims overlaps to maintain the common timeline. Preview and metering remain live while paused. Finish remuxes the MP4 without re-encoding to normalize packet durations and put playback metadata at the front of the file.
 
@@ -67,4 +85,4 @@ A real-camera check is still needed for each device/backend combination, particu
 
 ## License
 
-MIT. The portal file picker and theme-watching approach derive from [Omacut](../omacut), copyright David Heinemeier Hansson; attribution is retained in [LICENSE](LICENSE).
+MIT. The portal file picker, theme-watching approach, and filmstrip trimming interface derive from [Omacut](../omacut), copyright David Heinemeier Hansson; attribution is retained in [LICENSE](LICENSE).
