@@ -6,3 +6,5 @@ SOURCES += ui_tests.cpp ../src/theme.cpp
 HEADERS += ../src/theme.h
 INCLUDEPATH += ../src
 RESOURCES += ../src/resources.qrc
+# QTest includes all of QtCore, which trips GCC 16 over Qt's own QBitArray.
+QMAKE_CXXFLAGS += -Wno-sfinae-incomplete

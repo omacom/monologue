@@ -34,7 +34,7 @@ To build and install the Arch package:
 | Space | Record / pause / resume; play / pause while editing |
 | Enter or Ctrl+Enter | Stop the take and edit it |
 | Esc | Confirm discarding the clip and start over |
-| Q | Quit (offers to stop and keep an active take) |
+| Q | Quit (asks first if the take is still recording or unsaved) |
 | ? | Keyboard help |
 
 The shutter button records and stops; the round button beside it pauses and resumes.
@@ -59,9 +59,9 @@ Handles catch on pause marks, neighbouring clips, and the playhead. Playback pla
 | Z | Zoom to the clip under the playhead; again to zoom out |
 | Ctrl+S | Save |
 
-## Recordings and settings
+## Storage and settings
 
-Recordings stay in the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`. The **Recordings** menu lists completed and interrupted takes, their sizes, and actions to reopen, inspect files, or discard them. Recovery never interrupts startup. Edits and pause marks are kept with each take, so reopening one restores its clips. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden file beside the destination, then renamed into place. Closing Monologue does not delete the original; only explicit Discard does.
+Takes are recorded into the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`, one folder per take with its edits and pause marks. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden file beside the destination, then renamed into place. A take lives only as long as you're working on it: starting a new recording or quitting deletes it. If you haven't saved it since your last change, Monologue asks first, and offers to save.
 
 Device IDs and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
 

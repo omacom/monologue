@@ -22,6 +22,9 @@ Item {
     readonly property bool interacting: area.mode !== 0
 
     readonly property real handleW: 12
+    // The clip frames' border; the filmstrip sits exactly inside it.
+    readonly property int frameW: 3
+    readonly property real frameRadius: cornerRadius > 0 ? Math.min(8, cornerRadius + frameW) : 0
     readonly property real windowStart: zoomed ? viewStartSec : 0
     readonly property real windowEnd: zoomed ? viewEndSec : durationSec
     readonly property real windowLen: Math.max(windowEnd - windowStart, 0.001)
@@ -33,6 +36,11 @@ Item {
     function timeForX(x) {
         if (width <= 0 || durationSec <= 0) return 0
         return windowStart + Math.max(0, Math.min(1, x / width)) * windowLen
+    }
+    function nearClipEdge(t) {
+        for (var i = 0; i < clips.length; ++i)
+            if (Math.abs(xForTime(clips[i].start) - xForTime(t)) < 8 || Math.abs(xForTime(clips[i].end) - xForTime(t)) < 8) return true
+        return false
     }
     function clipAt(t) {
         for (var i = 0; i < clips.length; ++i)
@@ -54,14 +62,16 @@ Item {
 
     Rectangle {
         id: track
-        anchors.fill: parent; anchors.topMargin: 4; anchors.bottomMargin: 4
-        radius: Math.min(6, root.cornerRadius); color: root.film; clip: true
-        Row {
+        anchors.fill: parent; anchors.topMargin: root.frameW; anchors.bottomMargin: root.frameW
+        radius: Math.max(0, root.frameRadius - root.frameW); color: root.film; clip: true
+        Item {
             anchors.fill: parent
             Repeater {
                 model: backend.thumbnails.count
                 Image {
-                    width: track.width / Math.max(backend.thumbnails.count, 1); height: track.height
+                    // Whole-pixel edges, so neighbouring frames never leave a seam between them.
+                    readonly property real slot: track.width / Math.max(backend.thumbnails.count, 1)
+                    x: Math.round(index * slot); width: Math.round((index + 1) * slot) - x; height: track.height
                     sourceSize.height: track.height
                     fillMode: Image.PreserveAspectCrop
                     asynchronous: true; cache: false
@@ -77,7 +87,8 @@ Item {
                 readonly property real from: index === 0 ? 0 : root.clips[index - 1].end
                 readonly property real to: index === root.clips.length ? root.durationSec : root.clips[index].start
                 visible: to > from
-                x: root.xForTime(from); width: Math.max(0, root.xForTime(to) - x); height: track.height
+                // Rounded like the clip frames, so no undimmed sliver shows between a gap and a handle.
+                x: Math.round(root.xForTime(from)); width: Math.max(0, Math.round(root.xForTime(to)) - x); height: track.height
                 color: area.gapHovered === index ? "#90000000" : "#c8000000"
             }
         }
@@ -85,12 +96,34 @@ Item {
             model: root.pauses
             Item {
                 required property var modelData
-                visible: modelData >= root.windowStart && modelData <= root.windowEnd
+                // A split made at this pause already shows it; a half-hidden mark would peek out beside the handle.
+                visible: modelData >= root.windowStart && modelData <= root.windowEnd && !root.nearClipEdge(modelData)
                 x: root.xForTime(modelData) - 4; width: 8; height: track.height
                 Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: 1; height: parent.height; color: "#70ffffff" }
                 Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: 6; height: 6; radius: 3; y: 3; color: "white" }
             }
         }
+    }
+
+    // Beneath the clip frames, so it never draws over a handle.
+    Rectangle {
+        visible: root.durationSec > 0 && root.playheadSec >= root.windowStart && root.playheadSec <= root.windowEnd
+        // Within a clip, keep the line between its handles, so a playhead at the clip's
+        // first or last frame shows on that frame instead of hiding under the handle.
+        x: {
+            var px = root.xForTime(root.playheadSec) - 1
+            for (var i = 0; i < root.clips.length; ++i) {
+                var c = root.clips[i]
+                if (root.playheadSec < c.start || root.playheadSec > c.end) continue
+                var from = Math.round(root.xForTime(c.start)) + root.handleW
+                var to = Math.round(root.xForTime(c.end)) - root.handleW - width
+                if (to >= from) px = Math.max(from, Math.min(px, to))
+                break
+            }
+            return Math.max(0, Math.min(root.width - width, px))
+        }
+        y: track.y
+        width: 2; height: track.height; color: "white"
     }
 
     // One accent frame per clip, with its handles inside the frame.
@@ -101,22 +134,23 @@ Item {
             required property var modelData
             required property int index
             readonly property bool hovered: area.clipHovered === index
-            x: root.xForTime(modelData.start) + 1; width: Math.max(4, root.xForTime(modelData.end) - root.xForTime(modelData.start) - 2)
+            // Whole pixels, so handles meet the filmstrip without an antialiased seam.
+            x: Math.round(root.xForTime(modelData.start)); width: Math.max(4, Math.round(root.xForTime(modelData.end)) - x)
             height: root.height
             Rectangle {
                 anchors.fill: parent
-                radius: Math.min(7, root.cornerRadius + 1); color: "transparent"
-                border.color: root.accent; border.width: 3
+                radius: root.frameRadius; color: "transparent"
+                border.color: root.accent; border.width: root.frameW
             }
             Rectangle {
                 width: Math.min(root.handleW, parent.width / 2); height: parent.height
-                radius: Math.min(5, root.cornerRadius); color: root.accent
+                topLeftRadius: root.frameRadius; bottomLeftRadius: root.frameRadius; color: root.accent
                 Rectangle { anchors.centerIn: parent; width: 2; height: 16; radius: 1; color: root.film }
             }
             Rectangle {
                 x: parent.width - width
                 width: Math.min(root.handleW, parent.width / 2); height: parent.height
-                radius: Math.min(5, root.cornerRadius); color: root.accent
+                topRightRadius: root.frameRadius; bottomRightRadius: root.frameRadius; color: root.accent
                 Rectangle { anchors.centerIn: parent; width: 2; height: 16; radius: 1; color: root.film }
             }
             // Remove this clip. Only offered when another clip would remain.
@@ -137,11 +171,6 @@ Item {
         }
     }
 
-    Rectangle {
-        visible: root.durationSec > 0 && root.playheadSec >= root.windowStart && root.playheadSec <= root.windowEnd
-        x: root.xForTime(root.playheadSec) - 1; y: 4
-        width: 2; height: root.height - 8; color: "white"
-    }
 
     // Hint above the timeline: the time under a dragged handle, or what a double-click will do.
     Rectangle {
@@ -149,7 +178,7 @@ Item {
         readonly property string hint: area.gapHovered >= 0 ? "Double-click to restore"
                                       : area.splitHovered >= 0 ? "Double-click to join"
                                       : area.clipHovered >= 0 && !area.onHandle ? "Double-click to split" : ""
-        visible: area.mode === 1 || (area.mode === 0 && area.containsMouse && !area.removeHovered && hint !== "")
+        visible: root.enabled && (area.mode === 1 || (area.mode === 0 && area.containsMouse && !area.removeHovered && hint !== ""))
         width: label.implicitWidth + 20; height: 26
         radius: Math.min(7, root.cornerRadius + 1); color: "#2c2c2f"
         x: Math.max(0, Math.min(root.width - width, (dragging ? root.xForTime(area.activeTime) : area.mouseX) - width / 2)); y: -height - 8
@@ -180,7 +209,7 @@ Item {
         // The hovered clip's × sits in its top-right corner, inside the handle.
         function onRemove(x, y) {
             if (clipHovered < 0 || root.clips.length < 2) return false
-            var right = root.xForTime(root.clips[clipHovered].end) - 1 - root.handleW - 4
+            var right = root.xForTime(root.clips[clipHovered].end) - root.handleW - 4
             var width = root.xForTime(root.clips[clipHovered].end) - root.xForTime(root.clips[clipHovered].start)
             return width > 62 && x >= right - 20 && x <= right && y >= 7 && y <= 27
         }

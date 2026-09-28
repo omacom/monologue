@@ -40,13 +40,14 @@ QtObject {
     property string meterText: "−9 dBFS"
     property url clip: ""
     property string clipName: "Monologue-2026-09-17.mp4"
-    property var recordings: []
     property real saveProgress: 0
     property var clips: [{start: 0, end: 84}]
     property var pauses: [30, 61.5]
     property real keptDuration: clips.reduce((total, c) => total + c.end - c.start, 0)
     property bool canUndo: false
     property bool canRedo: false
+    property bool unsaved: true
+    property int newRecordings: 0
     property QtObject thumbnails: QtObject {
         property int count: 12
         property int ready: 0
@@ -61,10 +62,10 @@ QtObject {
     function setPreview(sink) {}
     function toggleRecording() { toggles++; state = state === "ready" || state === "paused" ? "recording" : "paused"; changed() }
     function finish() { state = "finished"; changed() }
-    function refreshRecordings() {}
     function selectCamera(i) {}
     function selectMicrophone(i) {}
-    function newRecording() { state = "ready"; changed() }
+    function newRecording() { newRecordings++; state = "ready"; changed() }
+    function closeTake() {}
     function discardCurrent() { discards++; state = "ready"; changed() }
     function save() {}
     function split(t) {
@@ -165,12 +166,43 @@ QtObject {
         QCOMPARE(clips()[0].toMap()["start"].toDouble(),0.0);
         backend->setProperty("state","recording");
         QTest::keyClick(window,Qt::Key_Return,Qt::ControlModifier); QCOMPARE(backend->property("state").toString(),QString("finished"));
+        // Finalizing keeps the picture clear: progress shows where the timeline will appear.
+        auto *overlay=window->findChild<QQuickItem*>("statusOverlay"); QVERIFY(overlay);
+        auto *finishing=window->findChild<QQuickItem*>("finishingStrip"); QVERIFY(finishing);
+        backend->setProperty("state","finalizing"); QTest::qWait(50);
+        QVERIFY(finishing->isVisible()); QVERIFY(!overlay->isVisible());
+        window->grabWindow().save("/tmp/monologue-ui-finishing.png");
+        // Saving shows its progress in the Save button, not over the video.
+        auto *saveButton=window->findChild<QQuickItem*>("saveButton"); QVERIFY(saveButton);
+        backend->setProperty("state","saving"); backend->setProperty("saveProgress",0.42); QTest::qWait(250);
+        QVERIFY(!overlay->isVisible()); QVERIFY(!finishing->isVisible());
+        QCOMPARE(saveButton->property("text").toString(),QString("Saving 42%"));
+        window->grabWindow().save("/tmp/monologue-ui-saving.png");
+        backend->setProperty("saveProgress",0); backend->setProperty("state","finished"); QTest::qWait(50);
+        QCOMPARE(saveButton->property("text").toString(),QString("Save"));
+        // Leaving an unsaved take asks first; a saved one goes straight to a new recording.
+        auto *unsaved=window->findChild<QObject*>("unsavedDialog"); QVERIFY(unsaved);
+        auto *newButton=window->findChild<QQuickItem*>("newRecording"); QVERIFY(newButton);
+        const auto newAt=newButton->mapToScene(QPointF(newButton->width()/2,newButton->height()/2)).toPoint();
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
+        QTRY_VERIFY(unsaved->property("opened").toBool());
+        QCOMPARE(backend->property("newRecordings").toInt(),0);
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        QTest::keyClick(window,Qt::Key_Q); QTRY_VERIFY(unsaved->property("opened").toBool());
+        QCOMPARE(unsaved->property("action").toString(),QString("quit"));
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        QVERIFY(window->isVisible());
+        backend->setProperty("unsaved",false);
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
+        QCOMPARE(backend->property("newRecordings").toInt(),1); QVERIFY(!unsaved->property("visible").toBool());
         // Entering the editor shows the clip's first frame instead of black.
         const auto red=themeDir.filePath("red.mp4");
         QProcess encode; encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240:d=1","-c:v","libx264","-pix_fmt","yuv420p",red});
         QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
         auto *clipVideo=window->findChild<QObject*>("clipVideo"); QVERIFY(clipVideo);
         auto *sink=clipVideo->property("videoSink").value<QVideoSink*>(); QVERIFY(sink);
+        // Reaching the end of the file must not clear the picture to black.
+        QCOMPARE(clipVideo->property("endOfStreamPolicy").toInt(),1);
         QVideoFrame shown; connect(sink,&QVideoSink::videoFrameChanged,window,[&](const QVideoFrame &f) { shown=f; });
         backend->setProperty("state","ready"); QTest::qWait(50);
         backend->setProperty("clip",QUrl::fromLocalFile(red)); backend->setProperty("state","finished");

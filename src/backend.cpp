@@ -11,9 +11,8 @@
 #include <QSaveFile>
 #include <QUuid>
 #include <QProcess>
-#include <QDesktopServices>
 #include <QFutureWatcher>
-#include <QtConcurrent>
+#include <QtConcurrentRun>
 #include <QRegularExpression>
 #include <cmath>
 #include <cstdio>
@@ -99,13 +98,13 @@ void Backend::refreshDevices() {
         if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
     }
 }
-void Backend::releaseSources() {
+void Backend::releaseSources(bool keepPicture) {
     if(m_camera) { m_camera->disconnect(this); m_camera->stop(); m_capture.setCamera(nullptr); delete m_camera; m_camera=nullptr; }
     if(m_audio) { m_audio->disconnect(this); m_audio->stop(); delete m_audio; m_audio=nullptr; }
     m_cameraHealthy=false; m_audioHealthy=false;
     m_videoOrigin=-1; m_audioCapturedUntil=-1; m_videoCapturedUntil=-1;
     m_lastFrame=QVideoFrame();
-    if(m_preview) m_preview->setVideoFrame({});
+    if(m_preview && !keepPicture) m_preview->setVideoFrame({});
     m_level=m_peak=-60; emit meterChanged();
 }
 void Backend::activateSources() {
@@ -158,7 +157,8 @@ void Backend::receiveVideo(const QVideoFrame &frame) {
         sourceFailed("The camera did not provide its maximum resolution. Choose another source or Retry."); return;
     }
     m_lastFrame=frame;
-    if(m_preview) m_preview->setVideoFrame(frame);
+    // Once stopped, the preview holds the take's final frame while it finalizes.
+    if(m_preview && m_state!="finalizing") m_preview->setVideoFrame(frame);
     if(!m_cameraHealthy) {
         m_cameraHealthy=true;
         m_settings.setValue("camera/id",m_cameraId);
@@ -280,7 +280,7 @@ void Backend::writerFinished() {
     for(const auto join:m_writer->joins()) m_pauses.append(join/1000000.0);
     m_storedEdit={};
     m_writer->deleteLater(); m_writer=nullptr;
-    releaseSources();
+    releaseSources(true);
     if(m_discardAfter) {
         QDir(m_root+"/"+m_takeId).removeRecursively(); emit safeToClose(); return;
     }
@@ -314,7 +314,6 @@ void Backend::probeClip(const QString &path,bool currentTake) {
             m_clipPath.clear();
         }
         refreshRecordings(); emit changed();
-        if(m_quitAfter) emit safeToClose();
     });
     const auto fps=m_fps;
     watcher->setFuture(QtConcurrent::run([path,currentTake,fps] {
@@ -327,6 +326,7 @@ void Backend::probeClip(const QString &path,bool currentTake) {
 }
 void Backend::newRecording() {
     if(m_writer || m_probing || m_state=="saving" || m_dialogOpen) return;
+    closeTake();
     m_clipPath.clear(); m_clipFileName.clear(); m_takeId.clear(); m_duration=0;
     resetEdit({},{}); m_thumbnails.clear();
     activateSources();
@@ -369,10 +369,8 @@ void Backend::copyTo(const QString &destination) {
     m_state="saving"; m_message="Saving your clip…"; emit changed();
     auto *watcher=new QFutureWatcher<QString>(this);
     connect(watcher,&QFutureWatcher<QString>::finished,this,[this,watcher,destination] {
-        const auto error=watcher->result(); watcher->deleteLater(); m_state="finished";
-        m_message=error.isEmpty()?"Saved to "+destination:"Could not save: "+error;
-        if(error.isEmpty()) m_settings.setValue("saveDirectory",QFileInfo(destination).absolutePath());
-        emit changed();
+        const auto error=watcher->result(); watcher->deleteLater();
+        saved(destination,error);
     });
     watcher->setFuture(QtConcurrent::run([source,destination] { return media::copyAtomically(source,destination); }));
 }
@@ -396,26 +394,45 @@ void Backend::exportTo(const QString &destination) {
         }
     });
     connect(m_export,&QProcess::finished,this,[this,destination](int code,QProcess::ExitStatus status) {
+        auto *process=std::exchange(m_export,nullptr);
+        process->deleteLater();
         QString error;
         if(status!=QProcess::NormalExit || code!=0) {
-            error=QString::fromUtf8(m_export->readAllStandardError()).trimmed().left(500);
+            error=QString::fromUtf8(process->readAllStandardError()).trimmed().left(500);
             if(error.isEmpty()) error="ffmpeg could not encode the clip.";
         } else if(std::rename(QFile::encodeName(m_exportPartial).constData(),QFile::encodeName(destination).constData())!=0)
             error="Could not move the finished MP4 into place.";
         saved(destination,error);
     });
     connect(m_export,&QProcess::errorOccurred,this,[this,destination](QProcess::ProcessError error) {
-        if(error==QProcess::FailedToStart) saved(destination,"ffmpeg could not be started.");
+        if(error!=QProcess::FailedToStart) return;
+        m_export->deleteLater(); m_export=nullptr;
+        saved(destination,"ffmpeg could not be started.");
     });
     m_export->start("ffmpeg",media::exportArgs(m_clipPath,m_exportPartial,edit::kept(m_edit),m_clipAudio));
 }
 void Backend::saved(const QString &destination,const QString &error) {
-    if(!m_export) return;
-    m_export->deleteLater(); m_export=nullptr;
-    if(!error.isEmpty()) QFile::remove(m_exportPartial);
+    if(!error.isEmpty() && !m_exportPartial.isEmpty()) QFile::remove(m_exportPartial);
+    m_exportPartial.clear();
     m_state="finished"; m_saveProgress=0;
     m_message=error.isEmpty()?"Saved to "+destination:"Could not save: "+error;
-    if(error.isEmpty()) m_settings.setValue("saveDirectory",QFileInfo(destination).absolutePath());
+    if(error.isEmpty()) {
+        m_settings.setValue("saveDirectory",QFileInfo(destination).absolutePath());
+        m_savedEdit=m_edit; m_hasSaved=true;
+        emit editChanged();
+    }
+    emit changed();
+}
+bool Backend::unsaved() const {
+    return (m_state=="finished" || m_state=="saving") && (!m_hasSaved || m_savedEdit!=m_edit);
+}
+void Backend::closeTake() {
+    // Leaving the editor: the take has served its purpose, whether or not it was saved.
+    if(m_writer || m_probing || m_state=="saving" || m_takeId.isEmpty()) return;
+    if(auto directory=recordingDirectory(m_takeId); !directory.isEmpty()) QDir(directory).removeRecursively();
+    m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear();
+    if(m_state=="finished") m_state="closed";
+    resetEdit({},{}); m_thumbnails.clear();
     emit changed();
 }
 QVariantList Backend::clips() const {
@@ -430,6 +447,7 @@ QVariantList Backend::pauses() const {
 }
 void Backend::resetEdit(const edit::Clips &clips,const QList<double> &pauses) {
     m_edit=clips; m_pauses=pauses; m_undo.clear(); m_redo.clear(); m_gesture=false;
+    m_savedEdit.clear(); m_hasSaved=false;
     emit editChanged();
 }
 void Backend::applyEdit(edit::Clips next) {
@@ -545,11 +563,6 @@ void Backend::discardRecording(const QString &id) {
     if(id==m_takeId) newRecording();
     refreshRecordings();
 }
-void Backend::showFiles(const QString &id) {
-    const auto directory=recordingDirectory(id);
-    if(!directory.isEmpty()) QDesktopServices::openUrl(QUrl::fromLocalFile(directory));
-}
-void Backend::finishAndClose() { m_quitAfter=true; finish(); }
 void Backend::discardAndClose() { m_discardAfter=true; finish(); }
 void Backend::discardCurrent() {
     if(m_dialogOpen || m_probing || m_state=="saving" || m_state=="finalizing") return;

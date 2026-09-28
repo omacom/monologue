@@ -19,9 +19,8 @@ ApplicationWindow {
     readonly property int cornerRadius: theme.radius
     readonly property bool finished: backend.state === "finished" || backend.state === "saving"
     readonly property bool busy: backend.state === "finalizing" || backend.state === "saving"
-    readonly property bool overlayOpen: closeDialog.visible || recordingsDialog.visible || discardDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
+    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
     property bool quitting: false
-    property string discardId: ""
     property var playbackOutput: null
     function time(seconds) {
         var s = Math.max(0, Math.floor(seconds))
@@ -90,13 +89,24 @@ ApplicationWindow {
         player.pause(); seekTo(target)
     }
     function space() { if (finished) togglePlayback(); else backend.toggleRecording() }
+    // Leaving the editor deletes the take, so ask first unless it's been saved as it stands.
+    function leaveTake(action) {
+        if (backend.unsaved) { player.pause(); unsavedDialog.action = action; unsavedDialog.open() }
+        else leave(action)
+    }
+    function leave(action) {
+        player.stop()
+        if (action === "quit") { backend.closeTake(); quitting = true; win.close() }
+        else { backend.newRecording(); liveVideo.forceActiveFocus() }
+    }
     function closeSafely() {
         if (busy || backend.dialogOpen) return
         if (backend.takeActive) closeDialog.open()
+        else if (finished) leaveTake("quit")
         else { quitting = true; win.close() }
     }
     onClosing: close => {
-        if (!quitting && (backend.takeActive || busy || backend.dialogOpen)) { close.accepted = false; closeSafely() }
+        if (!quitting && (backend.takeActive || busy || backend.dialogOpen || finished)) { close.accepted = false; closeSafely() }
     }
     Connections {
         target: backend
@@ -151,7 +161,6 @@ ApplicationWindow {
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
         microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
         chevron: "M6 9l6 6 6-6",
-        list: "M4 6h16 M4 12h16 M4 18h10",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
         play: "M8 4.5v15l12.5-7.5z",
         pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z",
@@ -181,20 +190,34 @@ ApplicationWindow {
         property bool primary: false
         property string iconPath: ""
         property bool iconFilled: false
+        // 0–1 fills the button as a progress bar; -1 is an ordinary button.
+        property real progress: -1
         padding: 14; topPadding: 10; bottomPadding: 10
         font.pixelSize: 13; font.weight: Font.DemiBold
         focusPolicy: Qt.TabFocus
         implicitHeight: 42
-        readonly property color foreground: button.primary ? win.accentForeground : button.flat && !button.hovered ? win.dimColor : win.textColor
-        contentItem: Row {
-            spacing: 8; opacity: button.enabled ? 1 : .4
-            Icon { visible: button.iconPath !== ""; path: button.iconPath; filled: button.iconFilled; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
-            Text { visible: button.text !== ""; text: button.text; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+        readonly property color foreground: button.progress >= 0 ? win.textColor : button.primary ? win.accentForeground : button.flat && !button.hovered ? win.dimColor : win.textColor
+        contentItem: Item {
+            implicitWidth: label.implicitWidth; implicitHeight: label.implicitHeight
+            Row {
+                id: label
+                anchors.centerIn: parent
+                spacing: 8; opacity: button.enabled ? 1 : .4
+                Icon { visible: button.iconPath !== ""; path: button.iconPath; filled: button.iconFilled; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+                Text { visible: button.text !== ""; text: button.text; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+            }
         }
         background: Rectangle {
-            radius: win.cornerRadius; color: button.primary ? win.accent : button.flat ? (button.hovered ? "#1f1f23" : "transparent") : button.hovered ? "#3a3a3e" : "#2c2c2f"
+            radius: win.cornerRadius; clip: true
+            color: button.progress >= 0 ? "#2c2c2f" : button.primary ? win.accent : button.flat ? (button.hovered ? "#1f1f23" : "transparent") : button.hovered ? "#3a3a3e" : "#2c2c2f"
             opacity: button.enabled ? 1 : .4
             border.width: button.activeFocus ? 2 : 0; border.color: button.primary ? win.accentForeground : win.accent
+            Rectangle {
+                visible: button.progress >= 0
+                width: parent.width * Math.max(0, Math.min(1, button.progress)); height: parent.height
+                radius: parent.radius; color: win.accent; opacity: .55
+                Behavior on width { NumberAnimation { duration: 200 } }
+            }
         }
         Keys.onReturnPressed: clicked()
         Keys.onEnterPressed: clicked()
@@ -309,14 +332,17 @@ ApplicationWindow {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
             VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
-            VideoOutput { id: clipVideo; objectName: "clipVideo"; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
+            // Hold the last frame at the end of the file rather than clearing to black.
+            VideoOutput { id: clipVideo; objectName: "clipVideo"; endOfStreamPolicy: VideoOutput.KeepLastFrame; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
             Column {
                 anchors.centerIn: parent; width: Math.min(400, parent.width-40); spacing: 16
-                visible: backend.state === "unavailable" || backend.state === "starting" || win.busy
+                // Only for when there is no usable picture; progress lives in the timeline and Save button.
+                objectName: "statusOverlay"
+                visible: backend.state === "unavailable" || backend.state === "starting"
                 Label {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 15
-                    text: win.busy ? (backend.state === "saving" ? "Saving your clip…" + (backend.saveProgress > 0 ? " " + Math.floor(backend.saveProgress * 100) + "%" : "") : "Finishing your clip…") : backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
+                    text: backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
                 }
                 ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: "Retry"; onClicked: backend.retry() }
             }
@@ -328,11 +354,12 @@ ApplicationWindow {
                 Label { id: messageText; anchors.centerIn: parent; width: parent.width - 28; text: backend.message; color: win.accent; font.pixelSize: 12; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter }
             }
         }
-        // Hairline under the frame: the mic level while live, the clip position once finished.
+        // The mic level under the live frame, with a peak tick. The editor has its own timeline.
         Item {
-            Layout.fillWidth: true; implicitHeight: 3; z: 1
+            visible: !win.finished && backend.state !== "finalizing"
+            Layout.fillWidth: true; implicitHeight: 5; z: 1
             Rectangle {
-                id: meter; visible: !win.finished; anchors.fill: parent; color: "#1a1a1d"
+                id: meter; anchors.fill: parent; color: "#2a2a2e"
                 readonly property real fraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.level + 60) / 60)) : 0
                 readonly property real peakFraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.peakLevel + 60) / 60)) : 0
                 Rectangle {
@@ -345,11 +372,29 @@ ApplicationWindow {
             }
         }
         Item {
-            visible: win.finished; z: 1
+            visible: win.finished || backend.state === "finalizing"; z: 1
             Layout.fillWidth: true; Layout.topMargin: 16; Layout.leftMargin: 16; Layout.rightMargin: 16
             implicitHeight: editBar.implicitHeight
+            // Holds the timeline's place while the take finalizes, so the filmstrip fills in right here.
+            Rectangle {
+                id: finishing; objectName: "finishingStrip"
+                visible: backend.state === "finalizing"
+                anchors.fill: parent; anchors.topMargin: 3; anchors.bottomMargin: 3
+                radius: Math.min(6, win.cornerRadius); color: "#1c1c1e"; clip: true
+                Rectangle {
+                    id: sweep
+                    width: parent.width / 4; height: 2; anchors.bottom: parent.bottom
+                    color: win.accent
+                    NumberAnimation on x {
+                        running: finishing.visible; loops: Animation.Infinite
+                        from: -sweep.width; to: finishing.width; duration: 1100; easing.type: Easing.InOutSine
+                    }
+                }
+                Label { anchors.centerIn: parent; text: "Finishing your take…"; color: win.dimColor; font.pixelSize: 12 }
+            }
             EditBar {
                 id: editBar; objectName: "editBar"
+                visible: win.finished
                 anchors.fill: parent
                 enabled: !win.busy
                 accent: win.accent; accentForeground: win.accentForeground
@@ -384,10 +429,11 @@ ApplicationWindow {
                     }
                 }
                 ActionButton {
+                    objectName: "newRecording"
                     visible: win.finished; flat: true; iconPath: win.icons.back; text: "New recording"
                     anchors.left: parent.left; anchors.leftMargin: -14; anchors.verticalCenter: parent.verticalCenter
                     enabled: !win.busy && !backend.dialogOpen
-                    onClicked: { player.stop(); backend.newRecording(); liveVideo.forceActiveFocus() }
+                    onClicked: win.leaveTake("new")
                 }
             }
             RowLayout {
@@ -442,16 +488,17 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
                 Item { Layout.fillWidth: true }
-                ToolButton {
-                    id: recordingsButton; Accessible.name: "Recordings"
-                    enabled: !backend.takeActive && !win.busy && !backend.dialogOpen
-                    opacity: enabled ? 1 : .4
-                    implicitWidth: 40; implicitHeight: 40
-                    contentItem: Item { Icon { anchors.centerIn: parent; path: win.icons.list; color: recordingsButton.hovered ? win.textColor : win.dimColor } }
-                    onClicked: { player.pause(); backend.refreshRecordings(); recordingsDialog.open() }
-                    ToolTip.visible: hovered; ToolTip.text: "Recordings (" + backend.recordings.length + ")"
+                ActionButton {
+                    objectName: "saveButton"
+                    readonly property bool saving: backend.state === "saving"
+                    visible: win.finished; primary: true
+                    // Stays at full strength while saving: it shows the progress instead of the video.
+                    enabled: !backend.dialogOpen
+                    Layout.minimumWidth: 116
+                    progress: saving ? backend.saveProgress : -1
+                    text: saving ? (backend.saveProgress > 0 ? "Saving " + Math.floor(backend.saveProgress * 100) + "%" : "Saving…") : "Save"
+                    onClicked: { if (saving) return; player.pause(); backend.save() }
                 }
-                ActionButton { visible: win.finished; text: "Save"; primary: true; enabled: !win.busy && !backend.dialogOpen; onClicked: { player.pause(); backend.save() } }
             }
         }
     }
@@ -463,7 +510,8 @@ ApplicationWindow {
         onPositionChanged: {
             if (playbackState === MediaPlayer.PlayingState) {
                 var t = position / 1000, next = win.playableFrom(t)
-                if (next < 0) { pause(); win.seekTo(backend.clips[backend.clips.length - 1].end); return }
+                // Past the last clip: stop where we are. Seeking to its end could land past the final frame.
+                if (next < 0) { pause(); editBar.playheadSec = backend.clips[backend.clips.length - 1].end; return }
                 if (next - t > 0.05) { position = Math.round(next * 1000); return }
             }
             if (!editBar.interacting) editBar.playheadSec = position / 1000
@@ -480,53 +528,34 @@ ApplicationWindow {
     }
     Component { id: playbackAudio; AudioOutput {} }
     ThemedDialog {
-        id: closeDialog; anchors.centerIn: parent; modal: true; title: "Stop this recording?"
+        id: closeDialog; anchors.centerIn: parent; modal: true; title: "Quit and discard this take?"
         closePolicy: Popup.CloseOnEscape
         ColumnLayout {
             spacing: 16
-            Label { text: "Stop and keep the clip in Recordings before closing, or keep recording."; wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
+            Label { text: "Quitting deletes the take you're recording. Stop to edit and save it first."; wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
             RowLayout {
                 ActionButton { text: "Keep recording"; onClicked: closeDialog.close() }
-                ActionButton { text: "Discard"; onClicked: { closeDialog.close(); backend.discardAndClose() } }
-                ActionButton { text: "Stop and keep"; primary: true; onClicked: { closeDialog.close(); backend.finishAndClose() } }
+                ActionButton { text: "Discard and quit"; onClicked: { closeDialog.close(); backend.discardAndClose() } }
+                ActionButton { text: "Stop and edit"; primary: true; onClicked: { closeDialog.close(); backend.finish() } }
             }
         }
     }
     ThemedDialog {
-        id: recordingsDialog; anchors.centerIn: parent; modal: true
-        title: "Recordings"; width: Math.min(win.width-40,700); height: Math.min(win.height-60,490)
-        standardButtons: Dialog.Close
-        ColumnLayout {
-            anchors.fill: parent
-            Label { text: "Originals stay here until you discard them."; color: "#aaaab1"; font.pixelSize: 12 }
-            Label { visible: backend.recordings.length === 0; text: "Your finished and interrupted takes will appear here."; wrapMode: Text.WordWrap; Layout.fillWidth: true }
-            ListView {
-                Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 8
-                model: backend.recordings
-                delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width; height: 92; color: "#202023"; radius: 8
-                    ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 10; spacing: 3
-                        Label { text: modelData.name; Layout.fillWidth: true; elide: Text.ElideMiddle; font.pixelSize: 12 }
-                        RowLayout {
-                            Label { text: modelData.status + " · " + modelData.size; color: "#aaaab1"; font.pixelSize: 11; Layout.fillWidth: true }
-                            ActionButton { text: "Open"; onClicked: { recordingsDialog.close(); backend.openRecording(modelData.id) } }
-                            ActionButton { text: "Files"; onClicked: backend.showFiles(modelData.id) }
-                            ActionButton { text: "Discard"; onClicked: { win.discardId=modelData.id; discardDialog.open() } }
-                        }
-                    }
-                }
-                ScrollBar.vertical: ScrollBar {}
-            }
-        }
-    }
-    ThemedDialog {
-        id: discardDialog; anchors.centerIn: parent; modal: true; title: "Discard this recording?"
+        id: unsavedDialog; objectName: "unsavedDialog"
+        anchors.centerIn: parent; modal: true; title: "Discard this take?"
         width: Math.min(win.width-40,460)
-        standardButtons: Dialog.Cancel | Dialog.Discard
-        Label { width: parent.width; text: "This deletes the original from Recordings. Saved copies are kept."; wrapMode: Text.WordWrap }
-        onDiscarded: { player.stop(); backend.discardRecording(win.discardId) }
+        closePolicy: Popup.CloseOnEscape
+        property string action: "new"
+        ColumnLayout {
+            width: parent.width; spacing: 16
+            Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: "You haven't saved this take since your last change. " + (unsavedDialog.action === "quit" ? "Quitting" : "Starting a new recording") + " deletes it." }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ActionButton { text: "Cancel"; onClicked: unsavedDialog.close() }
+                ActionButton { objectName: "unsavedDiscard"; text: unsavedDialog.action === "quit" ? "Discard and quit" : "Discard"; onClicked: { unsavedDialog.close(); win.leave(unsavedDialog.action) } }
+                ActionButton { text: "Save…"; primary: true; onClicked: { unsavedDialog.close(); backend.save() } }
+            }
+        }
     }
     ThemedDialog {
         id: restartDialog; objectName: "restartDialog"

@@ -268,10 +268,15 @@ private slots:
         Backend exporter(picker=new FakePicker,false);
         QTRY_VERIFY(!exporter.recordings().isEmpty());
         exporter.openRecording(id); QTRY_COMPARE(exporter.state(),QString("finished"));
+        QVERIFY(exporter.unsaved());
         exporter.save(); picker->choose(QUrl::fromLocalFile(saved));
         QCOMPARE(exporter.state(),QString("saving"));
         QTRY_COMPARE_WITH_TIMEOUT(exporter.state(),QString("finished"),30000);
         QVERIFY2(exporter.message().startsWith("Saved to"),qPrintable(exporter.message()));
+        // Saved as it stands until the next edit; undoing that edit makes it saved again.
+        QVERIFY(!exporter.unsaved());
+        exporter.split(exporter.duration()-.25); QVERIFY(exporter.unsaved());
+        exporter.undo(); QVERIFY(!exporter.unsaved());
         const auto p=media::probe(saved); QVERIFY2(p.ok,qPrintable(p.error));
         QVERIFY(p.audio); QCOMPARE(p.size,QSize(320,240));
         QVERIFY2(std::abs(p.duration-kept)<.1,qPrintable(QString("%1 vs %2").arg(p.duration).arg(kept)));
@@ -283,7 +288,22 @@ private slots:
         QVERIFY(quint8(rgb[0])>180 && quint8(rgb[2])<80);
         QVERIFY(quint8(rgb[rgb.size()-3])<80 && quint8(rgb[rgb.size()-1])>180);
         QVERIFY(!QDir(fixture.path()).entryList(QDir::Hidden|QDir::Files).join(",").contains("partial"));
-        backend.discardRecording(id);
+        // Leaving the editor deletes the take.
+        exporter.closeTake(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved));
+        QVERIFY(exporter.clip().isEmpty()); QVERIFY(!exporter.unsaved());
+    }
+    void newRecordingDeletesTake() {
+        const auto root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings";
+        const QString id="00000000-0000-0000-0000-000000000003";
+        QVERIFY(QDir().mkpath(root+"/"+id));
+        QVERIFY(QFile::copy(fixture.filePath("fixture.mp4"),root+"/"+id+"/take.mp4"));
+        QFile manifest(root+"/"+id+"/take.json"); QVERIFY(manifest.open(QIODevice::WriteOnly));
+        manifest.write("{\"filename\":\"take.mp4\",\"status\":\"complete\"}"); manifest.close();
+        Backend backend(new FakePicker,false);
+        QTRY_VERIFY(!backend.recordings().isEmpty());
+        backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
+        backend.newRecording();
+        QVERIFY(!QDir(root+"/"+id).exists()); QVERIFY(backend.clip().isEmpty());
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;

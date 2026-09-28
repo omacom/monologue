@@ -44,6 +44,8 @@ class Backend : public QObject {
     Q_PROPERTY(double keptDuration READ keptDuration NOTIFY editChanged)
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY editChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
+    // The finished take has not been saved as it is now edited.
+    Q_PROPERTY(bool unsaved READ unsaved NOTIFY editChanged)
     Q_PROPERTY(QObject *thumbnails READ thumbnails CONSTANT)
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -74,6 +76,7 @@ public:
     double keptDuration() const { return edit::keptDuration(m_edit); }
     bool canUndo() const { return !m_undo.isEmpty(); }
     bool canRedo() const { return !m_redo.isEmpty(); }
+    bool unsaved() const;
     Thumbnails *thumbnails() { return &m_thumbnails; }
     edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
@@ -98,8 +101,8 @@ public:
     Q_INVOKABLE void refreshRecordings();
     Q_INVOKABLE void openRecording(const QString &id);
     Q_INVOKABLE void discardRecording(const QString &id);
-    Q_INVOKABLE void showFiles(const QString &id);
-    Q_INVOKABLE void finishAndClose();
+    // Deletes the finished take on leaving the editor, e.g. when quitting.
+    Q_INVOKABLE void closeTake();
     Q_INVOKABLE void discardAndClose();
     Q_INVOKABLE void discardCurrent();
 signals:
@@ -114,7 +117,8 @@ private:
     qint64 now() const { return m_wall.nsecsElapsed() / 1000; }
     void refreshDevices();
     void activateSources();
-    void releaseSources();
+    // keepPicture leaves the last camera frame on screen, e.g. while a stopped take finalizes.
+    void releaseSources(bool keepPicture = false);
     void readAudio();
     void receiveAudio(const QByteArray &data, qint64 capturedAt);
     void finishWhenCaptured();
@@ -155,7 +159,7 @@ private:
     QString m_cameraId, m_audioId, m_state = "starting", m_message, m_formatLabel;
     QString m_root, m_takeId, m_clipPath, m_clipFileName;
     QString m_interruption, m_status;
-    edit::Clips m_edit;
+    edit::Clips m_edit, m_savedEdit;
     QList<edit::Clips> m_undo, m_redo;
     QList<double> m_pauses;
     QJsonObject m_storedEdit;
@@ -170,5 +174,5 @@ private:
     qint64 m_clipUntil = 0, m_peakUntil = 0, m_signalAt = 0;
     double m_duration = 0, m_level = -60, m_peak = -60, m_pendingPeak = 0, m_fps = 30;
     bool m_cameraHealthy = false, m_audioHealthy = false, m_dialogOpen = false;
-    bool m_quitAfter = false, m_discardAfter = false, m_restartAfter = false, m_probing = false;
+    bool m_hasSaved = false, m_discardAfter = false, m_restartAfter = false, m_probing = false;
 };
