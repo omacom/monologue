@@ -5,6 +5,7 @@
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -28,12 +29,29 @@ int media::bestFormat(const QList<Format> &formats) {
     }
     return best;
 }
-QCameraFormat media::bestCameraFormat(const QCameraDevice &device) {
+QCameraFormat media::bestCameraFormat(const QCameraDevice &device, const QSize &preferred) {
     const auto formats = device.videoFormats();
     QList<Format> choices;
-    for (const auto &f : formats) choices.append({f.resolution(), f.minFrameRate(), f.maxFrameRate(), int(f.pixelFormat())});
+    QList<int> origin;
+    for (int i = 0; i < formats.size(); ++i) {
+        const auto &f = formats[i];
+        if (!preferred.isEmpty() && f.resolution() != preferred) continue;
+        choices.append({f.resolution(), f.minFrameRate(), f.maxFrameRate(), int(f.pixelFormat())});
+        origin.append(i);
+    }
+    // An explicit resolution that this camera lacks falls back to the maximum.
+    if (choices.isEmpty() && !preferred.isEmpty()) return bestCameraFormat(device);
     const int index = bestFormat(choices);
-    return index < 0 ? QCameraFormat() : formats[index];
+    return index < 0 ? QCameraFormat() : formats[origin[index]];
+}
+QList<QSize> media::cameraResolutions(const QCameraDevice &device) {
+    QList<QSize> sizes;
+    for (const auto &f : device.videoFormats())
+        if (!f.resolution().isEmpty() && f.maxFrameRate() > 0 && !sizes.contains(f.resolution())) sizes.append(f.resolution());
+    std::sort(sizes.begin(), sizes.end(), [](const QSize &a, const QSize &b) {
+        return qint64(a.width()) * a.height() > qint64(b.width()) * b.height();
+    });
+    return sizes;
 }
 double media::peak(const QByteArray &data, const QAudioFormat &format) {
     double result = 0;

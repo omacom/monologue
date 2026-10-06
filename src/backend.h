@@ -1,4 +1,5 @@
 #pragma once
+#include <QSize>
 #include <QObject>
 #include <QMediaDevices>
 #include <QMediaCaptureSession>
@@ -25,6 +26,8 @@ class Backend : public QObject {
     Q_PROPERTY(QVariantList cameras READ cameras NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList microphones READ microphones NOTIFY devicesChanged)
     Q_PROPERTY(int cameraIndex READ cameraIndex NOTIFY devicesChanged)
+    Q_PROPERTY(QVariantList resolutions READ resolutions NOTIFY resolutionsChanged)
+    Q_PROPERTY(int resolutionIndex READ resolutionIndex NOTIFY resolutionsChanged)
     Q_PROPERTY(int microphoneIndex READ microphoneIndex NOTIFY devicesChanged)
     Q_PROPERTY(bool ready READ ready NOTIFY changed)
     Q_PROPERTY(bool audioEnabled READ audioEnabled NOTIFY changed)
@@ -55,6 +58,8 @@ public:
     QString message() const { return m_message; }
     QString formatLabel() const { return m_formatLabel; }
     QVariantList cameras() const { return m_cameras; }
+    QVariantList resolutions() const { return m_resolutions; }
+    int resolutionIndex() const;
     QVariantList microphones() const { return m_microphones; }
     int cameraIndex() const;
     int microphoneIndex() const;
@@ -81,6 +86,7 @@ public:
     edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
     Q_INVOKABLE void selectCamera(int index);
+    Q_INVOKABLE void selectResolution(int index);
     Q_INVOKABLE void selectMicrophone(int index);
     Q_INVOKABLE void retry();
     Q_INVOKABLE void toggleRecording();
@@ -108,6 +114,7 @@ public:
 signals:
     void changed();
     void devicesChanged();
+    void resolutionsChanged();
     void meterChanged();
     void recordingsChanged();
     void editChanged();
@@ -155,7 +162,8 @@ private:
     bool m_activateHardware;
     QString m_pendingDestination;
     Writer *m_writer = nullptr;
-    QVariantList m_cameras, m_microphones, m_recordings;
+    QVariantList m_cameras, m_microphones, m_recordings, m_resolutions;
+    QSize m_chosenResolution;  // empty means the camera's maximum
     QString m_cameraId, m_audioId, m_state = "starting", m_message, m_formatLabel;
     QString m_root, m_takeId, m_clipPath, m_clipFileName;
     QString m_interruption, m_status;

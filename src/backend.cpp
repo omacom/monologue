@@ -31,6 +31,10 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recordings";
     m_cameraId=m_settings.value("camera/id").toString();
     m_audioId=m_settings.value("microphone/id").toString();
+    {
+        const auto parts=m_settings.value("camera/resolution").toString().split('x');
+        if(parts.size()==2) m_chosenResolution=QSize(parts[0].toInt(),parts[1].toInt());
+    }
     m_capture.setVideoSink(&m_sink);
     connect(&m_sink,&QVideoSink::videoFrameChanged,this,&Backend::receiveVideo);
     if(m_activateHardware) {
@@ -58,6 +62,10 @@ Backend::~Backend() {
     if(m_export) { m_export->disconnect(this); m_export->kill(); m_export->waitForFinished(); QFile::remove(m_exportPartial); }
 }
 int Backend::cameraIndex() const { return indexOf(m_cameras,m_cameraId); }
+int Backend::resolutionIndex() const {
+    for(int i=0;i<m_resolutions.size();++i) if(m_resolutions[i].toMap()["selected"].toBool()) return i;
+    return 0;
+}
 int Backend::microphoneIndex() const { return indexOf(m_microphones,m_audioId); }
 bool Backend::ready() const { return m_state=="ready" && m_cameraHealthy && (!audioEnabled() || m_audioHealthy); }
 QString Backend::clipName() const { return m_clipFileName; }
@@ -118,7 +126,17 @@ void Backend::activateSources() {
     for(const auto &d:QMediaDevices::audioInputs()) if(deviceId(d.id())==m_audioId) selectedAudio=d;
     if(selectedCamera.isNull()) { m_state="unavailable"; m_message="Connect a camera or choose an available video source."; }
     else {
-        m_cameraFormat=media::bestCameraFormat(selectedCamera);
+        const auto sizes=media::cameraResolutions(selectedCamera);
+        const bool chosenAvailable=m_chosenResolution.isValid() && sizes.contains(m_chosenResolution) && m_chosenResolution!=sizes.value(0);
+        m_resolutions.clear();
+        for(int i=0;i<sizes.size();++i) {
+            const auto &size=sizes[i];
+            const bool selected=chosenAvailable ? size==m_chosenResolution : i==0;
+            m_resolutions.append(QVariantMap{{"width",size.width()},{"height",size.height()},{"selected",selected},
+                {"label",QString("%1 × %2%3").arg(size.width()).arg(size.height()).arg(i==0?" (maximum)":"")}});
+        }
+        emit resolutionsChanged();
+        m_cameraFormat=media::bestCameraFormat(selectedCamera,chosenAvailable ? m_chosenResolution : QSize());
         if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message="This camera advertises no supported video formats."; }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
@@ -219,6 +237,15 @@ void Backend::sourceFailed(const QString &message) {
 void Backend::selectCamera(int index) {
     if(m_writer || index<0 || index>=m_cameras.size() || m_state=="saving" || m_probing) return;
     m_cameraId=m_cameras[index].toMap()["id"].toString(); activateSources();
+}
+void Backend::selectResolution(int index) {
+    if(m_writer || index<0 || index>=m_resolutions.size() || m_state=="saving" || m_probing) return;
+    const auto choice=m_resolutions[index].toMap();
+    // The first entry is the maximum, which is stored as "no preference".
+    m_chosenResolution=index==0 ? QSize() : QSize(choice["width"].toInt(),choice["height"].toInt());
+    if(index==0) m_settings.remove("camera/resolution");
+    else m_settings.setValue("camera/resolution",QString("%1x%2").arg(m_chosenResolution.width()).arg(m_chosenResolution.height()));
+    activateSources();
 }
 void Backend::selectMicrophone(int index) {
     if(m_writer || index<0 || index>=m_microphones.size() || m_state=="saving" || m_probing) return;

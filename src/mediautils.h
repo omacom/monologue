@@ -10,7 +10,8 @@
 namespace media {
 struct Format { QSize size; double minFps; double maxFps; int pixelFormat; };
 int bestFormat(const QList<Format> &formats);
-QCameraFormat bestCameraFormat(const QCameraDevice &device);
+QCameraFormat bestCameraFormat(const QCameraDevice &device, const QSize &preferred = {});
+QList<QSize> cameraResolutions(const QCameraDevice &device);
 double targetFps(double minimum, double maximum);
 double peak(const QByteArray &data, const QAudioFormat &format);
 QString copyAtomically(const QString &source, const QString &destination);

@@ -1,4 +1,12 @@
 #include "writer.h"
+#include <QMetaObject>
+#include <cstring>
+#include <QVideoFrameFormat>
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
+#include <libavutil/pixfmt.h>
+}
 #include <QMediaFormat>
 #include <QUrl>
 #include <QAbstractVideoBuffer>
@@ -30,6 +38,54 @@ private:
     QVideoFrame m_source;
     bool m_mapped=false;
 };
+
+// Webcams deliver MJPEG, which Qt's encoder decodes to 4:4:4 that hardware H.264
+// encoders reject and software x264 struggles with at 1080p. Hand the encoder
+// plain 8-bit 4:2:0 NV12 instead, which also plays everywhere. Runs on a worker.
+QVideoFrame jpegToNv12(const QByteArray &jpeg, const QSize &size) {
+    const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_MJPEG);
+    if (!codec) return {};
+    AVCodecContext *decoder = avcodec_alloc_context3(codec);
+    AVPacket *packet = av_packet_alloc();
+    AVFrame *decoded = av_frame_alloc();
+    QVideoFrame output;
+    if (decoder && packet && decoded && avcodec_open2(decoder, codec, nullptr) == 0
+        && av_new_packet(packet, jpeg.size()) == 0) {
+        memcpy(packet->data, jpeg.constData(), jpeg.size());
+        if (avcodec_send_packet(decoder, packet) == 0 && avcodec_receive_frame(decoder, decoded) == 0
+            && decoded->width == size.width() && decoded->height == size.height()) {
+            QVideoFrameFormat format(size, QVideoFrameFormat::Format_NV12);
+            format.setColorSpace(QVideoFrameFormat::ColorSpace_BT601);
+            format.setColorRange(QVideoFrameFormat::ColorRange_Video);
+            QVideoFrame frame(format);
+            if (frame.map(QVideoFrame::WriteOnly)) {
+                thread_local SwsContext *context = nullptr;
+                const bool fullRange = decoded->color_range == AVCOL_RANGE_JPEG || decoded->format == AV_PIX_FMT_YUVJ420P
+                    || decoded->format == AV_PIX_FMT_YUVJ422P || decoded->format == AV_PIX_FMT_YUVJ444P;
+                AVPixelFormat source = AVPixelFormat(decoded->format);
+                if (source == AV_PIX_FMT_YUVJ420P) source = AV_PIX_FMT_YUV420P;
+                else if (source == AV_PIX_FMT_YUVJ422P) source = AV_PIX_FMT_YUV422P;
+                else if (source == AV_PIX_FMT_YUVJ444P) source = AV_PIX_FMT_YUV444P;
+                context = sws_getCachedContext(context, size.width(), size.height(), source,
+                                               size.width(), size.height(), AV_PIX_FMT_NV12, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                uint8_t *planes[2] = {frame.bits(0), frame.bits(1)};
+                const int strides[2] = {frame.bytesPerLine(0), frame.bytesPerLine(1)};
+                int rows = 0;
+                if (context) {
+                    const int *coefficients = sws_getCoefficients(SWS_CS_ITU601);
+                    sws_setColorspaceDetails(context, coefficients, fullRange ? 1 : 0, coefficients, 0, 0, 1 << 16, 1 << 16);
+                    rows = sws_scale(context, decoded->data, decoded->linesize, 0, size.height(), planes, strides);
+                }
+                frame.unmap();
+                if (rows == size.height()) output = frame;
+            }
+        }
+    }
+    av_frame_free(&decoded);
+    av_packet_free(&packet);
+    avcodec_free_context(&decoder);
+    return output;
+}
 }
 
 void TakeClock::start(qint64 now) {
@@ -75,6 +131,7 @@ QList<qint64> TakeClock::joins() const {
 }
 
 Writer::Writer(QObject *parent) : QObject(parent) {
+    m_convertPool.setMaxThreadCount(3);
     m_session.setRecorder(&m_recorder);
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
@@ -93,6 +150,7 @@ static QMediaFormat recordingFormat(bool audio) {
     if (audio) f.setAudioCodec(QMediaFormat::AudioCodec::AAC);
     return f;
 }
+Writer::~Writer() { m_convertPool.waitForDone(); }
 bool Writer::supported(bool audio) { return recordingFormat(audio).isSupported(QMediaFormat::Encode); }
 bool Writer::start(const QString &path, const QVideoFrameFormat &format,
                    double fps, const QAudioFormat &audioFormat, qint64 now) {
@@ -137,16 +195,32 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     const qint64 frameIndex = qRound64(position * m_fps / 1000000.0);
     const qint64 timestamp = qRound64(frameIndex * 1000000.0 / m_fps);
     if (timestamp <= m_lastVideo) return;
-    m_tailFrame = frame;
-    frame = QVideoFrame(std::make_unique<FrameBuffer>(frame));
-    frame.setStartTime(timestamp);
-    frame.setEndTime(qRound64((frameIndex + 1) * 1000000.0 / m_fps));
-    frame.setStreamFrameRate(m_fps);
-    m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
     if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution. The take has been stopped and kept."); return; }
-    m_frames.enqueue(frame);
-    drain();
+    m_tailFrame = frame;
+    m_lastVideo = timestamp;
+    auto job = std::make_shared<Job>();
+    bool queued = false;
+    if (frame.pixelFormat() == QVideoFrameFormat::Format_Jpeg) {
+        QByteArray jpeg;
+        if (frame.map(QVideoFrame::ReadOnly)) {
+            jpeg = QByteArray(reinterpret_cast<const char *>(frame.bits(0)), frame.mappedBytes(0));
+            frame.unmap();
+        }
+        if (jpeg.isEmpty()) return;
+        const QSize size = frame.size();
+        queued = true;
+        m_convertPool.start([this, job, jpeg, size] {
+            job->frame = jpegToNv12(jpeg, size);
+            job->ready.store(true, std::memory_order_release);
+            QMetaObject::invokeMethod(this, &Writer::drain, Qt::QueuedConnection);
+        });
+    } else {
+        job->frame = QVideoFrame(std::make_unique<FrameBuffer>(frame));
+        job->ready.store(true, std::memory_order_release);
+    }
+    m_frames.enqueue({job, timestamp, qRound64((frameIndex + 1) * 1000000.0 / m_fps), {}});
+    if (!queued) drain();
 }
 void Writer::audio(QByteArray data, qint64 capturedAt) {
     if (m_stopping || m_failed || !m_audio || data.isEmpty()) return;
@@ -194,7 +268,18 @@ void Writer::appendAudio(const QByteArray &data) {
 void Writer::drain() {
     if (m_draining || m_failed) return;
     m_draining = true;
-    while (!m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) m_frames.dequeue();
+    while (!m_frames.isEmpty() && m_frames.head().job->ready.load(std::memory_order_acquire)) {
+        auto &head = m_frames.head();
+        if (!head.job->frame.isValid()) { m_frames.dequeue(); continue; }  // undecodable camera frame
+        if (!head.frame.isValid()) {
+            head.frame = QVideoFrame(std::make_unique<FrameBuffer>(head.job->frame));
+            head.frame.setStartTime(head.start);
+            head.frame.setEndTime(head.end);
+            head.frame.setStreamFrameRate(m_fps);
+        }
+        if (!m_video->sendVideoFrame(head.frame)) break;
+        m_frames.dequeue();
+    }
     while (!m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
         m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
     }

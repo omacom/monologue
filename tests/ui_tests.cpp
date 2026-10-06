@@ -28,6 +28,8 @@ QtObject {
     property var cameras: [{label: "Test camera"}]
     property var microphones: [{label: "Test microphone"}]
     property int cameraIndex: 0
+    property var resolutions: [{label: "1920 × 1080 maximum"}, {label: "1280 × 720"}]
+    property int resolutionIndex: 0
     property int microphoneIndex: 0
     property bool ready: state === "ready"
     property bool audioEnabled: true
@@ -63,6 +65,7 @@ QtObject {
     function toggleRecording() { toggles++; state = state === "ready" || state === "paused" ? "recording" : "paused"; changed() }
     function finish() { state = "finished"; changed() }
     function selectCamera(i) {}
+    function selectResolution(i) {}
     function selectMicrophone(i) {}
     function newRecording() { newRecordings++; state = "ready"; changed() }
     function closeTake() {}
