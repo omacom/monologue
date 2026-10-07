@@ -163,8 +163,7 @@ ApplicationWindow {
         chevron: "M6 9l6 6 6-6",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
         play: "M8 4.5v15l12.5-7.5z",
-        pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z",
-        stop: "M7.5 5.5h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"
+        pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z"
     })
 
     // 24×24 SVG paths, stroked like line icons unless filled.
@@ -581,7 +580,7 @@ ApplicationWindow {
                 KeyNavigation.left: restartCancel; KeyNavigation.right: restartCancel
             }
         }
-        Label { width: parent.width; text: "This deletes the current clip. Saved copies are kept."; wrapMode: Text.WordWrap }
+        Label { width: parent.width; text: "This deletes the current take. Anything you saved stays where you saved it."; wrapMode: Text.WordWrap }
         onAccepted: { player.stop(); backend.discardCurrent() }
     }
     ThemedDialog {

@@ -20,15 +20,20 @@
 class FakePicker : public FilePicker {
 public:
     QUrl suggestion;
-    void openVideo() override {}
-    void exportVideo(const QUrl &url,double,double,const QList<int>&) override { suggestion=url; }
+    void saveVideo(const QUrl &url) override { suggestion=url; }
     void cancel() { emit closed(); }
-    void choose(const QUrl &url) { emit closed(); emit exportSelected(url,0,0,0); }
+    void choose(const QUrl &url) { emit closed(); emit selected(url); }
 };
 
 class Tests : public QObject {
     Q_OBJECT
     QTemporaryDir fixture;
+    // A take left on disk, as if Monologue had been killed while it was open.
+    static QString leaveTake(const QString &id, const QString &clip) {
+        const auto directory=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings/"+id;
+        if(!QDir().mkpath(directory) || !QFile::copy(clip,directory+"/take.mp4")) return {};
+        return directory;
+    }
 private slots:
     void formatSelection() {
         QList<media::Format> f{{{1920,1080},30,60,0}, {{3840,2160},15,15,0}, {{640,480},30,30,0}};
@@ -66,9 +71,6 @@ private slots:
         QCOMPARE(parts.size(),2); QCOMPARE(parts[0],(Range{0,4.5})); QCOMPARE(parts[1],(Range{6,7}));
         QCOMPARE(keptDuration(clips),5.5);
         QVERIFY(untouched(whole(10),10)); QVERIFY(untouched({{0,4},{4,10}},10)); QVERIFY(!untouched(clips,10));
-        QCOMPARE(fromJson(toJson({{1,3},{5,8}}),10),(Clips{{1,3},{5,8}}));
-        QCOMPARE(fromJson({},10),whole(10));
-        QCOMPARE(fromJson(toJson({{4,4.05}}),10),whole(10));
         const auto args=media::exportArgs("in.mp4","out.mp4",{{0,2},{3,4.5}},true);
         QVERIFY(args.contains("[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[v][a]"));
         QCOMPARE(args.count("-i"),2);
@@ -177,29 +179,28 @@ private slots:
             QVERIFY(QFile::copy(directory.filePath("take.mp4"),fixture.filePath("fixture.mp4")));
         }
     }
-    void recordingLifecycle() {
-        const auto root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings";
-        const QString id="00000000-0000-0000-0000-000000000001";
-        const auto directory=root+"/"+id;
-        QVERIFY(QDir().mkpath(directory));
+    void recoveryAndSave() {
+        const auto directory=leaveTake("00000000-0000-0000-0000-000000000001",fixture.filePath("fixture.mp4"));
+        QVERIFY(!directory.isEmpty());
         const auto original=directory+"/take.mp4";
-        QVERIFY(QFile::copy(fixture.filePath("fixture.mp4"),original));
-        QFile manifest(directory+"/take.json"); QVERIFY(manifest.open(QIODevice::WriteOnly));
-        manifest.write("{\"filename\":\"take.mp4\",\"status\":\"complete\"}"); manifest.close();
         auto *picker=new FakePicker;
         Backend backend(picker,false);
-        QTRY_COMPARE(backend.recordings().size(),1);
-        // Recovery is nonmodal and does not open a retained take by itself.
-        QVERIFY(!backend.dialogOpen()); QVERIFY(backend.clip().isEmpty());
-        backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
+        // Launching finds the interrupted take and reopens it for editing.
+        QTRY_COMPARE(backend.state(),QString("finished"));
         QCOMPARE(backend.clip().toLocalFile(),original);
+        QVERIFY(backend.message().startsWith("Recovered")); QVERIFY(backend.unsaved());
+        {
+            // Another Monologue leaves a take that is still in use alone.
+            Backend other(new FakePicker,false); QTest::qWait(300);
+            QVERIFY(other.clip().isEmpty()); QVERIFY(QFile::exists(original));
+        }
         backend.save(); QVERIFY(backend.dialogOpen()); picker->cancel(); QVERIFY(!backend.dialogOpen());
         QCOMPARE(backend.state(),QString("finished")); QVERIFY(QFile::exists(original));
         const auto saved=fixture.filePath("saved clip");
         backend.save(); picker->choose(QUrl::fromLocalFile(saved));
         QTRY_COMPARE(backend.state(),QString("finished"));
         QVERIFY2(backend.message().startsWith("Saved to"),qPrintable(backend.message()));
-        QVERIFY(QFile::exists(saved+".mp4")); QVERIFY(QFile::exists(original));
+        QVERIFY(QFile::exists(saved+".mp4")); QVERIFY(QFile::exists(original)); QVERIFY(!backend.unsaved());
         QSignalSpy overwrite(&backend,&Backend::overwriteRequested);
         backend.save(); picker->choose(QUrl::fromLocalFile(saved));
         QCOMPARE(overwrite.count(),1); QVERIFY(backend.dialogOpen()); backend.confirmOverwrite(false);
@@ -208,75 +209,60 @@ private slots:
         QTRY_COMPARE(backend.state(),QString("finished")); QVERIFY(backend.message().startsWith("Saved to"));
         backend.save(); picker->choose(QUrl::fromLocalFile(fixture.filePath("missing/fail.mp4")));
         QTRY_COMPARE(backend.state(),QString("finished")); QVERIFY(backend.message().startsWith("Could not save"));
-        QVERIFY(QFile::exists(original));
-        backend.discardRecording("../"); QVERIFY(QFile::exists(original));
-        // A fresh backend still discovers the original and remembers Save's directory.
-        auto *secondPicker=new FakePicker;
-        Backend reopened(secondPicker,false); QTRY_COMPARE(reopened.recordings().size(),1);
-        reopened.openRecording(id); QTRY_COMPARE(reopened.state(),QString("finished"));
-        reopened.save(); QCOMPARE(QFileInfo(secondPicker->suggestion.toLocalFile()).absolutePath(),fixture.path()); secondPicker->cancel();
-        backend.discardCurrent(); QVERIFY(!QFile::exists(original)); QVERIFY(QFile::exists(saved+".mp4"));
+        // Leaving a take deletes its folder, so saving into it is refused.
+        backend.save(); picker->choose(QUrl::fromLocalFile(directory+"/copy.mp4"));
+        QVERIFY(backend.message().startsWith("Could not save")); QVERIFY(!QFile::exists(directory+"/copy.mp4"));
+        // Save remembers its folder.
+        backend.save(); QCOMPARE(QFileInfo(picker->suggestion.toLocalFile()).absolutePath(),fixture.path()); picker->cancel();
+        backend.discardCurrent(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved+".mp4"));
         QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.takeActive());
-        QCOMPARE(backend.recordings().size(),0);
     }
     void editingAndExport() {
-        const auto root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings";
-        const QString id="00000000-0000-0000-0000-000000000002";
-        const auto directory=root+"/"+id;
-        QVERIFY(QDir().mkpath(directory));
-        QVERIFY(QFile::copy(fixture.filePath("fixture.mp4"),directory+"/take.mp4"));
-        QFile manifest(directory+"/take.json"); QVERIFY(manifest.open(QIODevice::WriteOnly));
-        manifest.write("{\"filename\":\"take.mp4\",\"status\":\"complete\",\"pauses\":[1.0]}"); manifest.close();
+        const auto directory=leaveTake("00000000-0000-0000-0000-000000000002",fixture.filePath("fixture.mp4"));
+        QVERIFY(!directory.isEmpty());
         auto *picker=new FakePicker;
-        {
-            Backend backend(picker,false);
-            QTRY_VERIFY(!backend.recordings().isEmpty());
-            backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
-            QCOMPARE(backend.pauses(),QVariantList{1.0});
-            QTRY_COMPARE_WITH_TIMEOUT(backend.thumbnails()->ready(),Thumbnails::Count,20000);
-            QVERIFY(!backend.thumbnails()->store()->get(0).isNull() && backend.thumbnails()->store()->get(0).height()==90);
-            const double d=backend.duration();
-            QVERIFY(!backend.canUndo()); QCOMPARE(backend.clips().size(),1);
-            auto clip=[&](int i,const char *edge) { return backend.clips()[i].toMap()[edge].toDouble(); };
-            // Split, then drag the first clip's end and the second's start apart: one undo step per drag.
-            backend.split(0.5); backend.split(1.5); QCOMPARE(backend.clips().size(),3);
-            backend.split(1.55); QCOMPARE(backend.clips().size(),3);
-            backend.removeClip(1); QCOMPARE(backend.clips().size(),2);
-            QVERIFY(std::abs(backend.keptDuration()-(d-1))<.001);
-            backend.undo(); QCOMPARE(backend.clips().size(),3);
-            backend.beginGesture(); backend.setClip(1,0.4,1.5); backend.setClip(1,0.8,1.5); backend.endGesture();
-            // Clips never overlap their neighbours.
-            QCOMPARE(clip(1,"start"),0.8);
-            backend.setClip(0,0,1); QCOMPARE(clip(0,"end"),0.8);
-            backend.undo(); backend.undo(); QCOMPARE(clip(1,"start"),0.5); QVERIFY(backend.canUndo());
-            backend.redo(); QCOMPARE(clip(1,"start"),0.8);
-            backend.joinClips(0); QCOMPARE(backend.clips().size(),2); QCOMPARE(clip(0,"end"),1.5);
-            backend.undo();
-            // The middle clip goes: 0–0.5 and 1.5–end survive.
-            backend.removeClip(1);
-            backend.removeClip(0); backend.removeClip(0); QCOMPARE(backend.clips().size(),1);
-            backend.undo(); QCOMPARE(backend.clips().size(),2);
-            QVERIFY(std::abs(backend.keptDuration()-(d-1))<.001);
-        }
-        // Edits live in the manifest, so reopening a take restores them.
-        Backend backend(new FakePicker,false);
-        QTRY_VERIFY(!backend.recordings().isEmpty());
-        backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
-        QCOMPARE(backend.clips().size(),2); QVERIFY(!backend.canUndo());
+        Backend backend(picker,false);
+        QTRY_COMPARE(backend.state(),QString("finished"));
+        QTRY_COMPARE_WITH_TIMEOUT(backend.thumbnails()->ready(),Thumbnails::Count,20000);
+        QVERIFY(!backend.thumbnails()->store()->get(0).isNull() && backend.thumbnails()->store()->get(0).height()==90);
+        const double d=backend.duration();
+        QVERIFY(!backend.canUndo()); QCOMPARE(backend.clips().size(),1);
+        auto clip=[&](int i,const char *edge) { return backend.clips()[i].toMap()[edge].toDouble(); };
+        // Split, then drag the first clip's end and the second's start apart: one undo step per drag.
+        backend.split(0.5); backend.split(1.5); QCOMPARE(backend.clips().size(),3);
+        backend.split(1.55); QCOMPARE(backend.clips().size(),3);
+        backend.removeClip(1); QCOMPARE(backend.clips().size(),2);
+        QVERIFY(std::abs(backend.keptDuration()-(d-1))<.001);
+        backend.undo(); QCOMPARE(backend.clips().size(),3);
+        backend.beginGesture(); backend.setClip(1,0.4,1.5); backend.setClip(1,0.8,1.5); backend.endGesture();
+        // Clips never overlap their neighbours.
+        QCOMPARE(clip(1,"start"),0.8);
+        backend.setClip(0,0,1); QCOMPARE(clip(0,"end"),0.8);
+        backend.undo(); backend.undo(); QCOMPARE(clip(1,"start"),0.5); QVERIFY(backend.canUndo());
+        backend.redo(); QCOMPARE(clip(1,"start"),0.8);
+        backend.joinClips(0); QCOMPARE(backend.clips().size(),2); QCOMPARE(clip(0,"end"),1.5);
+        backend.undo();
+        // The middle clip goes: 0–0.5 and 1.5–end survive.
+        backend.removeClip(1);
+        backend.removeClip(0); backend.removeClip(0); QCOMPARE(backend.clips().size(),1);
+        backend.undo(); QCOMPARE(backend.clips().size(),2);
         const auto kept=backend.keptDuration();
+        QVERIFY(std::abs(kept-(d-1))<.001);
+        // Exporting reserves its own temporary file, never one that happens to be there.
+        const auto bystander=fixture.filePath(".edited.monologue-partial.mp4");
+        { QFile f(bystander); QVERIFY(f.open(QIODevice::WriteOnly)); f.write("mine"); }
         const auto saved=fixture.filePath("edited.mp4");
-        Backend exporter(picker=new FakePicker,false);
-        QTRY_VERIFY(!exporter.recordings().isEmpty());
-        exporter.openRecording(id); QTRY_COMPARE(exporter.state(),QString("finished"));
-        QVERIFY(exporter.unsaved());
-        exporter.save(); picker->choose(QUrl::fromLocalFile(saved));
-        QCOMPARE(exporter.state(),QString("saving"));
-        QTRY_COMPARE_WITH_TIMEOUT(exporter.state(),QString("finished"),30000);
-        QVERIFY2(exporter.message().startsWith("Saved to"),qPrintable(exporter.message()));
+        QVERIFY(backend.unsaved());
+        backend.save(); picker->choose(QUrl::fromLocalFile(saved));
+        QCOMPARE(backend.state(),QString("saving"));
+        QTRY_COMPARE_WITH_TIMEOUT(backend.state(),QString("finished"),30000);
+        QVERIFY2(backend.message().startsWith("Saved to"),qPrintable(backend.message()));
+        { QFile f(bystander); QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(),QByteArray("mine")); }
+        QVERIFY(QDir(fixture.path()).entryList({".edited-*"},QDir::Hidden|QDir::Files).isEmpty());
         // Saved as it stands until the next edit; undoing that edit makes it saved again.
-        QVERIFY(!exporter.unsaved());
-        exporter.split(exporter.duration()-.25); QVERIFY(exporter.unsaved());
-        exporter.undo(); QVERIFY(!exporter.unsaved());
+        QVERIFY(!backend.unsaved());
+        backend.split(backend.duration()-.25); QVERIFY(backend.unsaved());
+        backend.undo(); QVERIFY(!backend.unsaved());
         const auto p=media::probe(saved); QVERIFY2(p.ok,qPrintable(p.error));
         QVERIFY(p.audio); QCOMPARE(p.size,QSize(320,240));
         QVERIFY2(std::abs(p.duration-kept)<.1,qPrintable(QString("%1 vs %2").arg(p.duration).arg(kept)));
@@ -287,23 +273,48 @@ private slots:
         QVERIFY(rgb.size()>=6);
         QVERIFY(quint8(rgb[0])>180 && quint8(rgb[2])<80);
         QVERIFY(quint8(rgb[rgb.size()-3])<80 && quint8(rgb[rgb.size()-1])>180);
-        QVERIFY(!QDir(fixture.path()).entryList(QDir::Hidden|QDir::Files).join(",").contains("partial"));
         // Leaving the editor deletes the take.
-        exporter.closeTake(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved));
-        QVERIFY(exporter.clip().isEmpty()); QVERIFY(!exporter.unsaved());
+        backend.closeTake(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved));
+        QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.unsaved());
     }
-    void newRecordingDeletesTake() {
-        const auto root=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings";
-        const QString id="00000000-0000-0000-0000-000000000003";
-        QVERIFY(QDir().mkpath(root+"/"+id));
-        QVERIFY(QFile::copy(fixture.filePath("fixture.mp4"),root+"/"+id+"/take.mp4"));
-        QFile manifest(root+"/"+id+"/take.json"); QVERIFY(manifest.open(QIODevice::WriteOnly));
-        manifest.write("{\"filename\":\"take.mp4\",\"status\":\"complete\"}"); manifest.close();
+    void leavingDeletesTake() {
+        auto directory=leaveTake("00000000-0000-0000-0000-000000000003",fixture.filePath("fixture.mp4"));
+        {
+            Backend backend(new FakePicker,false);
+            QTRY_COMPARE(backend.state(),QString("finished"));
+            backend.newRecording();
+            QVERIFY(!QDir(directory).exists()); QVERIFY(backend.clip().isEmpty());
+        }
+        // Discard and quit, confirmed after the take already stopped by itself, closes at once.
+        directory=leaveTake("00000000-0000-0000-0000-000000000004",fixture.filePath("fixture.mp4"));
         Backend backend(new FakePicker,false);
-        QTRY_VERIFY(!backend.recordings().isEmpty());
-        backend.openRecording(id); QTRY_COMPARE(backend.state(),QString("finished"));
-        backend.newRecording();
-        QVERIFY(!QDir(root+"/"+id).exists()); QVERIFY(backend.clip().isEmpty());
+        QTRY_COMPARE(backend.state(),QString("finished"));
+        QSignalSpy closing(&backend,&Backend::safeToClose);
+        backend.discardAndClose();
+        QCOMPARE(closing.count(),1); QVERIFY(!QDir(directory).exists());
+    }
+    void unrecoverableTakeIsCleared() {
+        const auto directory=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings/00000000-0000-0000-0000-000000000005";
+        QVERIFY(QDir().mkpath(directory));
+        { QFile f(directory+"/take.mp4"); QVERIFY(f.open(QIODevice::WriteOnly)); f.write("not a video"); }
+        Backend backend(new FakePicker,false);
+        QTRY_COMPARE(backend.state(),QString("unavailable"));
+        QVERIFY(backend.message().contains("could not be recovered"));
+        QVERIFY(!QDir(directory).exists());
+    }
+    void tinyTakeKeepsItsClip() {
+        QTemporaryDir source;
+        QProcess encode;
+        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=64x64:r=30:d=0.04","-c:v","libx264","-pix_fmt","yuv420p",source.filePath("tiny.mp4")});
+        QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
+        const auto directory=leaveTake("00000000-0000-0000-0000-000000000006",source.filePath("tiny.mp4"));
+        Backend backend(new FakePicker,false);
+        QTRY_COMPARE(backend.state(),QString("finished"));
+        QVERIFY(backend.duration()<edit::minimumClip);
+        // Pressing and releasing a handle must not drop the take's only clip.
+        backend.beginGesture(); backend.endGesture();
+        QCOMPARE(backend.clips().size(),1);
+        backend.closeTake();
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;

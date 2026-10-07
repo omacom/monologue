@@ -164,6 +164,11 @@ QtObject {
         // Double-clicking the dimmed gap before the clip restores it.
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(20),at60.y()));
         QCOMPARE(clips()[0].toMap()["start"].toDouble(),0.0);
+        // A double-click a few pixels from a pause mark splits exactly at the pause.
+        QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+4,at60.y()));
+        QCOMPARE(clips().size(),2); QCOMPARE(clips()[0].toMap()["end"].toDouble(),61.5);
+        QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
+        QCOMPARE(clips().size(),1);
         backend->setProperty("state","recording");
         QTest::keyClick(window,Qt::Key_Return,Qt::ControlModifier); QCOMPARE(backend->property("state").toString(),QString("finished"));
         // Finalizing keeps the picture clear: progress shows where the timeline will appear.

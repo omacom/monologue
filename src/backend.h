@@ -10,8 +10,9 @@
 #include <QPointer>
 #include <QVariantList>
 #include <QTimer>
-#include <QJsonObject>
 #include <QProcess>
+#include <QLockFile>
+#include <memory>
 #include "writer.h"
 #include "edit.h"
 #include "thumbnails.h"
@@ -36,8 +37,6 @@ class Backend : public QObject {
     Q_PROPERTY(bool clipping READ clipping NOTIFY meterChanged)
     Q_PROPERTY(QString meterText READ meterText NOTIFY meterChanged)
     Q_PROPERTY(QUrl clip READ clip NOTIFY changed)
-    Q_PROPERTY(QString clipName READ clipName NOTIFY changed)
-    Q_PROPERTY(QVariantList recordings READ recordings NOTIFY recordingsChanged)
     Q_PROPERTY(double saveProgress READ saveProgress NOTIFY changed)
     Q_PROPERTY(QVariantList clips READ clips NOTIFY editChanged)
     Q_PROPERTY(QVariantList pauses READ pauses NOTIFY editChanged)
@@ -68,8 +67,6 @@ public:
     bool clipping() const { return now() < m_clipUntil; }
     QString meterText() const;
     QUrl clip() const { return QUrl::fromLocalFile(m_clipPath); }
-    QString clipName() const;
-    QVariantList recordings() const { return m_recordings; }
     double saveProgress() const { return m_saveProgress; }
     QVariantList clips() const;
     QVariantList pauses() const;
@@ -98,9 +95,6 @@ public:
     Q_INVOKABLE void endGesture();
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
-    Q_INVOKABLE void refreshRecordings();
-    Q_INVOKABLE void openRecording(const QString &id);
-    Q_INVOKABLE void discardRecording(const QString &id);
     // Deletes the finished take on leaving the editor, e.g. when quitting.
     Q_INVOKABLE void closeTake();
     Q_INVOKABLE void discardAndClose();
@@ -109,7 +103,6 @@ signals:
     void changed();
     void devicesChanged();
     void meterChanged();
-    void recordingsChanged();
     void editChanged();
     void safeToClose();
     void overwriteRequested(const QString &path);
@@ -135,8 +128,10 @@ private:
     void saved(const QString &destination, const QString &error);
     void applyEdit(edit::Clips next);
     void resetEdit(const edit::Clips &clips, const QList<double> &pauses);
-    void writeManifest(const QString &status);
-    QString recordingDirectory(const QString &id) const;
+    // Takes are deleted when you leave them, so one left on disk was interrupted.
+    void recoverTake();
+    bool lockTake(const QString &directory);
+    void deleteTake();
     void updateReady();
     QMediaDevices m_devices;
     QMediaCaptureSession m_capture;
@@ -155,14 +150,15 @@ private:
     bool m_activateHardware;
     QString m_pendingDestination;
     Writer *m_writer = nullptr;
-    QVariantList m_cameras, m_microphones, m_recordings;
+    QVariantList m_cameras, m_microphones;
     QString m_cameraId, m_audioId, m_state = "starting", m_message, m_formatLabel;
     QString m_root, m_takeId, m_clipPath, m_clipFileName;
-    QString m_interruption, m_status;
+    QString m_interruption;
+    // Held while a take is in use, so another Monologue never mistakes it for an interrupted one.
+    std::unique_ptr<QLockFile> m_takeLock;
     edit::Clips m_edit, m_savedEdit;
     QList<edit::Clips> m_undo, m_redo;
     QList<double> m_pauses;
-    QJsonObject m_storedEdit;
     Thumbnails m_thumbnails;
     QProcess *m_export = nullptr;
     QString m_exportPartial;

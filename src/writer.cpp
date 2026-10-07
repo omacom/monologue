@@ -78,7 +78,7 @@ Writer::Writer(QObject *parent) : QObject(parent) {
     m_session.setRecorder(&m_recorder);
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
-    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail("The encoder stopped responding. Partial files have been kept."); });
+    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail("The encoder stopped responding, so the take was stopped."); });
     connect(&m_recorder, &QMediaRecorder::errorOccurred, this, [this](auto, const QString &message) { fail(message); });
     connect(&m_recorder, &QMediaRecorder::recorderStateChanged, this, [this](auto state) {
         if (state == QMediaRecorder::StoppedState && m_stopping) {
@@ -144,7 +144,7 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     frame.setStreamFrameRate(m_fps);
     m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
-    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution. The take has been stopped and kept."); return; }
+    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return; }
     m_frames.enqueue(frame);
     drain();
 }
@@ -177,7 +177,7 @@ void Writer::padAudioTo(qint64 time) {
     const qint64 missing = qRound64(time * m_audioFormat.sampleRate() / 1000000.0) - m_audioFramesWritten;
     if (missing <= 0) return;
     if (m_audioFormat.durationForFrames(missing) > 500000) {
-        fail("Audio capture fell behind the recording. The interrupted take has been kept."); return;
+        fail("Audio capture fell behind the recording, so the take was stopped."); return;
     }
     appendAudio(QByteArray(missing * m_audioFormat.bytesPerFrame(),
                           m_audioFormat.sampleFormat() == QAudioFormat::UInt8 ? char(128) : char(0)));
@@ -187,7 +187,7 @@ void Writer::appendAudio(const QByteArray &data) {
     QAudioBuffer buffer(data, m_audioFormat, m_audioFormat.durationForFrames(m_audioFramesWritten));
     m_audioFramesWritten += buffer.frameCount();
     m_queuedAudioUs += buffer.duration();
-    if (m_queuedAudioUs > 500000) { fail("Audio encoding cannot keep up. The take has been stopped and kept."); return; }
+    if (m_queuedAudioUs > 500000) { fail("Audio encoding cannot keep up, so the take was stopped."); return; }
     m_buffers.enqueue(buffer);
     drain();
 }

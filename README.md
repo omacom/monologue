@@ -61,7 +61,9 @@ Handles catch on pause marks, neighbouring clips, and the playhead. Playback pla
 
 ## Storage and settings
 
-Takes are recorded into the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`, one folder per take with its edits and pause marks. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden file beside the destination, then renamed into place. A take lives only as long as you're working on it: starting a new recording or quitting deletes it. If you haven't saved it since your last change, Monologue asks first, and offers to save.
+Takes are recorded into the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`, one folder per take. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden temporary file beside the destination, then renamed into place. Saving into Monologue's own recordings folder is refused.
+
+A take lives only as long as you're working on it: starting a new recording or quitting deletes it. If you haven't saved it since your last change, Monologue asks first, and offers to save. If Monologue is killed or crashes with a take open, the next launch reopens that take in the editor (its edits and pause marks are not kept). A take that can't be played back is deleted. Each take holds a lock while in use, so a second Monologue window never mistakes it for an interrupted one.
 
 Device IDs and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
 
@@ -73,7 +75,7 @@ A disconnected source or encoder error stops the take and preserves its files. A
 ./bin/test
 ```
 
-Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, edit persistence, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
+Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
 
 The recording engine forwards native camera frames and one shared microphone PCM stream to timestamped Qt inputs. Microphone timestamps account for the audio server's measured capture latency, including buffered samples. The writer removes paused intervals by capture time and accepts delayed samples from before Pause or Finish. Finish briefly waits for those samples before closing the recording. Qt's audio encoder counts samples, so the writer pads genuine capture gaps and trims overlaps to maintain the common timeline. Preview and metering remain live while paused. Finish remuxes the MP4 without re-encoding to normalize packet durations and put playback metadata at the front of the file.
 
@@ -81,7 +83,7 @@ A synchronization regression test encodes and decodes matching flashes and audio
 
 Run `./bin/test-camera` explicitly for a short real camera/microphone recording with a pause and resume. It uses separate `monologue-camera-check` settings and storage, and retains its output for inspection. It is never run by `bin/test`.
 
-A real-camera check is still needed for each device/backend combination, particularly maximum-resolution throughput and synchronization over long takes. Short 1920 × 1080 and 3840 × 2160 hardware checks passed on this machine; they do not establish physical lip sync or sustained throughput. See [the plan](plans/monologue.md) for the manual acceptance checks.
+A real-camera check is still needed for each device/backend combination, particularly maximum-resolution throughput and synchronization over long takes. Short 1920 × 1080 and 3840 × 2160 hardware checks passed on this machine; they do not establish physical lip sync or sustained throughput.
 
 ## License
 
