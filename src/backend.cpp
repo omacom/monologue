@@ -68,9 +68,20 @@ void Backend::setPreview(QObject *sink) {
     if (m_preview && m_lastFrame.isValid()) m_preview->setVideoFrame(m_lastFrame);
 }
 void Backend::refreshDevices() {
-    const auto cameras=QMediaDevices::videoInputs();
+    // Infrared sensors (for face login) appear as greyscale-only cameras; they can't record a usable take.
+    QList<QCameraDevice> cameras;
+    for(const auto &d:QMediaDevices::videoInputs()) {
+        const auto formats=d.videoFormats();
+        if(std::all_of(formats.begin(),formats.end(),[](const auto &f) {
+            return f.pixelFormat()==QVideoFrameFormat::Format_Y8 || f.pixelFormat()==QVideoFrameFormat::Format_Y16;
+        })) continue;
+        cameras.append(d);
+    }
     const auto microphones=QMediaDevices::audioInputs();
-    if (m_cameraId.isEmpty() && !cameras.isEmpty()) m_cameraId=deviceId(QMediaDevices::defaultVideoInput().id());
+    if (m_cameraId.isEmpty() && !cameras.isEmpty()) {
+        const auto preferred=QMediaDevices::defaultVideoInput();
+        m_cameraId=deviceId((cameras.contains(preferred) ? preferred : cameras.first()).id());
+    }
     if (m_audioId.isEmpty() && !microphones.isEmpty()) m_audioId=deviceId(QMediaDevices::defaultAudioInput().id());
     auto label=[](const auto &device,const auto &all) {
         int count=0;
