@@ -517,7 +517,9 @@ void Backend::recoverTake() {
         for(const auto &name:QDir(entry.filePath()).entryList({"*.mp4"},QDir::Files))
             if(!name.endsWith(".finalizing.mp4")) clip=name;
         m_takeId=entry.fileName();
-        if(clip.isEmpty()) { deleteTake(); continue; }
+        // Only a recent take is worth reopening; anything older is just left over.
+        const QFileInfo file(entry.filePath()+"/"+clip);
+        if(clip.isEmpty() || file.lastModified().secsTo(QDateTime::currentDateTime())>=3600) { deleteTake(); continue; }
         m_interruption="Recovered the take from your last session.";
         m_pauses.clear();
         probeClip(entry.filePath()+"/"+clip,false);
