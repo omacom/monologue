@@ -302,6 +302,14 @@ private slots:
         QVERIFY(backend.message().contains("could not be recovered"));
         QVERIFY(!QDir(directory).exists());
     }
+    void staleTakeIsNotRecovered() {
+        const auto directory=leaveTake("00000000-0000-0000-0000-000000000007",fixture.filePath("fixture.mp4"));
+        QVERIFY(!directory.isEmpty());
+        { QFile f(directory+"/take.mp4"); QVERIFY(f.open(QIODevice::ReadWrite)); QVERIFY(f.setFileTime(QDateTime::currentDateTime().addSecs(-3601),QFileDevice::FileModificationTime)); }
+        Backend backend(new FakePicker,false);
+        QTRY_VERIFY(!QDir(directory).exists());
+        QVERIFY(backend.clip().isEmpty()); QVERIFY(backend.message().isEmpty());
+    }
     void tinyTakeKeepsItsClip() {
         QTemporaryDir source;
         QProcess encode;
