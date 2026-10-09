@@ -63,7 +63,7 @@ private:
     QQueue<QAudioBuffer> m_buffers;
     QTimer m_flushTimeout;
     TakeClock m_clock;
-    qint64 m_lastVideo = -1;
+    qint64 m_lastVideo = -1, m_lastIndex = -1;
     qint64 m_frameDuration = 33333;
     double m_fps = 30;
     qint64 m_queuedAudioUs = 0;
