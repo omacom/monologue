@@ -1,13 +1,13 @@
 #pragma once
 #include <QObject>
-#include <QAudioBufferInput>
-#include <QVideoFrameInput>
-#include <QMediaCaptureSession>
-#include <QMediaRecorder>
+#include <QAudioFormat>
 #include <QVideoFrame>
+#include <QFuture>
 #include <QQueue>
 #include <QTimer>
+#include <memory>
 #include <optional>
+#include "encoder.h"
 
 // Maps a monotonic capture clock onto a take with the paused intervals removed.
 class TakeClock {
@@ -34,6 +34,7 @@ class Writer : public QObject {
     Q_OBJECT
 public:
     explicit Writer(QObject *parent = nullptr);
+    ~Writer() override;
     bool start(const QString &path, const QVideoFrameFormat &videoFormat,
                double fps, const QAudioFormat &audioFormat, qint64 now);
     void video(QVideoFrame frame, qint64 capturedAt);
@@ -49,24 +50,22 @@ signals:
     void failed(const QString &message);
 private:
     void drain();
+    void close(bool discard);
+    void emitFinished();
     void fail(const QString &message);
     void appendAudio(const QByteArray &data);
     void padAudioTo(qint64 time);
     void videoAt(QVideoFrame frame, qint64 position);
-    QMediaCaptureSession m_session;
-    QMediaRecorder m_recorder;
-    QVideoFrameInput *m_video = nullptr;
-    QAudioBufferInput *m_audio = nullptr;
+    std::unique_ptr<Encoder> m_encoder;
     QAudioFormat m_audioFormat;
-    QQueue<QVideoFrame> m_frames;
+    // In capture order; JPEG frames resolve once decoded off the GUI thread.
+    QQueue<QFuture<QVideoFrame>> m_frames;
     QVideoFrame m_tailFrame;
-    QQueue<QAudioBuffer> m_buffers;
     QTimer m_flushTimeout;
     TakeClock m_clock;
     qint64 m_lastVideo = -1;
     qint64 m_frameDuration = 33333;
     double m_fps = 30;
-    qint64 m_queuedAudioUs = 0;
     qint64 m_audioFramesWritten = 0;
-    bool m_stopping = false, m_failed = false, m_draining = false;
+    bool m_stopping = false, m_failed = false, m_closing = false, m_finished = false;
 };

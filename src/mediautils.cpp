@@ -9,6 +9,9 @@
 #include <cstring>
 #include <limits>
 #include <cstdio>
+#include <memory>
+#include <vector>
+#include <turbojpeg.h>
 
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
@@ -34,6 +37,70 @@ QCameraFormat media::bestCameraFormat(const QCameraDevice &device) {
     for (const auto &f : formats) choices.append({f.resolution(), f.minFrameRate(), f.maxFrameRate(), int(f.pixelFormat())});
     const int index = bestFormat(choices);
     return index < 0 ? QCameraFormat() : formats[index];
+}
+QVideoFrame media::decodeJpeg(QByteArrayView jpeg) {
+    std::unique_ptr<void, decltype(&tj3Destroy)> tj(tj3Init(TJINIT_DECOMPRESS), tj3Destroy);
+    const auto *data = reinterpret_cast<const unsigned char *>(jpeg.data());
+    if (!tj || tj3DecompressHeader(tj.get(), data, jpeg.size()) != 0) return {};
+    const int width = tj3Get(tj.get(), TJPARAM_JPEGWIDTH), height = tj3Get(tj.get(), TJPARAM_JPEGHEIGHT);
+    const int sampling = tj3Get(tj.get(), TJPARAM_SUBSAMP), colorspace = tj3Get(tj.get(), TJPARAM_COLORSPACE);
+    if (width <= 0 || height <= 0 || width % 2 || height % 2 || sampling == TJSAMP_UNKNOWN ||
+        (colorspace != TJCS_YCbCr && colorspace != TJCS_GRAY)) return {};
+    // Decode to the JPEG's own planes, skipping libjpeg's RGB conversion.
+    const int planes = sampling == TJSAMP_GRAY ? 1 : 3;
+    std::vector<unsigned char> source[3];
+    unsigned char *destinations[3] = {};
+    int strides[3] = {}, heights[3] = {};
+    for (int i = 0; i < planes; ++i) {
+        strides[i] = tj3YUVPlaneWidth(i, width, sampling);
+        heights[i] = tj3YUVPlaneHeight(i, height, sampling);
+        source[i].resize(size_t(strides[i]) * heights[i]);
+        destinations[i] = source[i].data();
+    }
+    if (tj3DecompressToYUVPlanes8(tj.get(), data, jpeg.size(), destinations, strides) != 0) return {};
+
+    QVideoFrameFormat format(QSize(width, height), QVideoFrameFormat::Format_YUV420P);
+    format.setColorSpace(QVideoFrameFormat::ColorSpace_BT601);
+    format.setColorRange(QVideoFrameFormat::ColorRange_Video);
+    QVideoFrame frame(format);
+    if (!frame.map(QVideoFrame::WriteOnly)) return {};
+    // JPEG is full range; H.264 players expect video range.
+    unsigned char luma[256], chroma[256];
+    for (int v = 0; v < 256; ++v) { luma[v] = 16 + (v * 219 + 127) / 255; chroma[v] = 16 + (v * 224 + 127) / 255; }
+    for (int y = 0; y < height; ++y) {
+        const unsigned char *in = source[0].data() + size_t(y) * strides[0];
+        unsigned char *out = frame.bits(0) + qsizetype(y) * frame.bytesPerLine(0);
+        for (int x = 0; x < width; ++x) out[x] = luma[in[x]];
+    }
+    // Box-filter each chroma plane, whatever its sampling, onto the 4:2:0 grid.
+    const int outWidth = width / 2, outHeight = height / 2;
+    std::vector<int> columns(outWidth + 1);
+    for (int i = 1; i < 3; ++i) {
+        unsigned char *plane = frame.bits(i);
+        const int bytesPerLine = frame.bytesPerLine(i);
+        if (planes == 1) {
+            for (int y = 0; y < outHeight; ++y) std::memset(plane + qsizetype(y) * bytesPerLine, 128, outWidth);
+            continue;
+        }
+        for (int x = 0; x <= outWidth; ++x) columns[x] = qint64(x) * strides[i] / outWidth;
+        for (int y = 0; y < outHeight; ++y) {
+            const int top = qint64(y) * heights[i] / outHeight;
+            const int bottom = std::max(top + 1, int(qint64(y + 1) * heights[i] / outHeight));
+            unsigned char *out = plane + qsizetype(y) * bytesPerLine;
+            for (int x = 0; x < outWidth; ++x) {
+                const int left = columns[x], right = std::max(left + 1, columns[x + 1]);
+                int sum = 0;
+                for (int row = top; row < bottom; ++row) {
+                    const unsigned char *in = source[i].data() + size_t(row) * strides[i];
+                    for (int column = left; column < right; ++column) sum += in[column];
+                }
+                const int count = (bottom - top) * (right - left);
+                out[x] = chroma[(sum + count / 2) / count];
+            }
+        }
+    }
+    frame.unmap();
+    return frame;
 }
 double media::peak(const QByteArray &data, const QAudioFormat &format) {
     double result = 0;

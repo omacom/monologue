@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 #include <QSettings>
 #include <cmath>
+#include <turbojpeg.h>
 #include "mediautils.h"
 #include "theme.h"
 #include "writer.h"
@@ -117,6 +118,38 @@ private slots:
         QVERIFY(write(response,"{\"int\":8}")); QTRY_COMPARE(theme.radius(),8);
         QVERIFY(write(response,"unavailable")); QTest::qWait(1200); QCOMPARE(theme.radius(),8);
     }
+    void jpegDecodesToVideoRange_data() {
+        QTest::addColumn<int>("sampling");
+        QTest::newRow("4:2:2")<<int(TJSAMP_422); QTest::newRow("4:2:0")<<int(TJSAMP_420);
+        QTest::newRow("4:4:4")<<int(TJSAMP_444); QTest::newRow("gray")<<int(TJSAMP_GRAY);
+    }
+    void jpegDecodesToVideoRange() {
+        QFETCH(int,sampling);
+        // Red over white: BT.601 full-range Y/Cb/Cr 76/85/255 and 255/128/128.
+        QImage image(64,32,QImage::Format_RGB888); image.fill(Qt::white);
+        for(int y=0;y<32;++y) for(int x=0;x<32;++x) image.setPixelColor(x,y,Qt::red);
+        tjhandle tj=tj3Init(TJINIT_COMPRESS);
+        tj3Set(tj,TJPARAM_SUBSAMP,sampling); tj3Set(tj,TJPARAM_QUALITY,100);
+        unsigned char *jpeg=nullptr; size_t size=0;
+        QCOMPARE(tj3Compress8(tj,image.constBits(),64,image.bytesPerLine(),32,TJPF_RGB,&jpeg,&size),0);
+        auto frame=media::decodeJpeg(QByteArrayView(jpeg,qsizetype(size)));
+        tj3Free(jpeg); tj3Destroy(tj);
+        QVERIFY(frame.isValid());
+        QCOMPARE(frame.pixelFormat(),QVideoFrameFormat::Format_YUV420P);
+        QCOMPARE(frame.size(),QSize(64,32));
+        QCOMPARE(frame.surfaceFormat().colorRange(),QVideoFrameFormat::ColorRange_Video);
+        QVERIFY(frame.map(QVideoFrame::ReadOnly));
+        const auto near=[](int actual,int expected) { return std::abs(actual-expected)<=3; };
+        const bool gray=sampling==TJSAMP_GRAY;
+        // Video range: Y 16-235, chroma 16-240. Sample away from the edge.
+        QVERIFY2(near(frame.bits(0)[16*frame.bytesPerLine(0)+8],81),"red luma");
+        QVERIFY2(near(frame.bits(0)[16*frame.bytesPerLine(0)+56],235),"white luma");
+        QVERIFY2(near(frame.bits(1)[8*frame.bytesPerLine(1)+4],gray?128:91),"red Cb");
+        QVERIFY2(near(frame.bits(2)[8*frame.bytesPerLine(2)+4],gray?128:240),"red Cr");
+        QVERIFY2(near(frame.bits(1)[8*frame.bytesPerLine(1)+28],128),"white Cb");
+        frame.unmap();
+        QVERIFY(!media::decodeJpeg(QByteArrayView("not a jpeg")).isValid());
+    }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
     void realEncoding() {
         QFETCH(bool,sound);
@@ -166,7 +199,12 @@ private slots:
             auto stream=entry.toObject();
             const double duration=stream["duration"].toString().toDouble();
             QVERIFY2(std::abs(duration-2)<.08,qPrintable(QString::number(duration)));
-            if(stream["codec_type"]=="video") QCOMPARE(stream["nb_frames"].toString().toInt(),60);
+            if(stream["codec_type"]=="video") {
+                QCOMPARE(stream["nb_frames"].toString().toInt(),60);
+                // Standard 8-bit 4:2:0 High profile, which every player decodes.
+                QCOMPARE(stream["pix_fmt"].toString(),QString("yuv420p"));
+                QCOMPARE(stream["profile"].toString(),QString("High"));
+            }
         }
         if(sound) {
             QProcess pcm; pcm.start("ffmpeg",{"-v","error","-i",directory.filePath("take.mp4"),"-vn","-ac","1","-ar","48000","-f","s16le","-"});
