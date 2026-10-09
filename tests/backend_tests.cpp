@@ -199,7 +199,12 @@ private slots:
             auto stream=entry.toObject();
             const double duration=stream["duration"].toString().toDouble();
             QVERIFY2(std::abs(duration-2)<.08,qPrintable(QString::number(duration)));
-            if(stream["codec_type"]=="video") QCOMPARE(stream["nb_frames"].toString().toInt(),60);
+            if(stream["codec_type"]=="video") {
+                QCOMPARE(stream["nb_frames"].toString().toInt(),60);
+                // Standard 8-bit 4:2:0 High profile, which every player decodes.
+                QCOMPARE(stream["pix_fmt"].toString(),QString("yuv420p"));
+                QCOMPARE(stream["profile"].toString(),QString("High"));
+            }
         }
         if(sound) {
             QProcess pcm; pcm.start("ffmpeg",{"-v","error","-i",directory.filePath("take.mp4"),"-vn","-ac","1","-ar","48000","-f","s16le","-"});

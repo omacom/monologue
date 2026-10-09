@@ -9,7 +9,7 @@
 #include "thumbprovider.h"
 
 int main(int argc,char *argv[]) {
-    // Custom timestamped frame/buffer inputs require Qt's FFmpeg backend.
+    // Qt's FFmpeg backend delivers timestamped native camera frames.
     qputenv("QT_MEDIA_BACKEND","ffmpeg");
     QGuiApplication app(argc,argv);
     app.setApplicationName("monologue");
