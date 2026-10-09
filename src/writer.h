@@ -6,6 +6,9 @@
 #include <QMediaRecorder>
 #include <QVideoFrame>
 #include <QQueue>
+#include <QThreadPool>
+#include <atomic>
+#include <memory>
 #include <QTimer>
 #include <optional>
 
@@ -34,6 +37,7 @@ class Writer : public QObject {
     Q_OBJECT
 public:
     explicit Writer(QObject *parent = nullptr);
+    ~Writer() override;
     bool start(const QString &path, const QVideoFrameFormat &videoFormat,
                double fps, const QAudioFormat &audioFormat, qint64 now);
     void video(QVideoFrame frame, qint64 capturedAt);
@@ -58,7 +62,11 @@ private:
     QVideoFrameInput *m_video = nullptr;
     QAudioBufferInput *m_audio = nullptr;
     QAudioFormat m_audioFormat;
-    QQueue<QVideoFrame> m_frames;
+    // A video frame waiting for its (possibly off-thread) conversion to finish.
+    struct Job { std::atomic<bool> ready{false}; QVideoFrame frame; };
+    struct Pending { std::shared_ptr<Job> job; qint64 start = 0, end = 0; QVideoFrame frame; };
+    QQueue<Pending> m_frames;
+    QThreadPool m_convertPool;
     QVideoFrame m_tailFrame;
     QQueue<QAudioBuffer> m_buffers;
     QTimer m_flushTimeout;

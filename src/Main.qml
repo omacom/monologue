@@ -160,6 +160,7 @@ ApplicationWindow {
     readonly property var icons: ({
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
         microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
+        resolution: "M4 9V5h4 M20 9V5h-4 M4 15v4h4 M20 15v4h-4",
         chevron: "M6 9l6 6 6-6",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
         play: "M8 4.5v15l12.5-7.5z",
@@ -417,6 +418,14 @@ ApplicationWindow {
                         enabled: !backend.takeActive && !win.busy
                         onActivated: index => { backend.selectCamera(index); liveVideo.forceActiveFocus() }
                         Accessible.name: "Camera"
+                    }
+                    SourceChoice {
+                        id: resolutionChoice; iconPath: win.icons.resolution
+                        maximumTextWidth: Math.min(260, sources.width - 44)
+                        model: backend.resolutions; currentIndex: backend.resolutionIndex
+                        enabled: !backend.takeActive && !win.busy && backend.resolutions.length > 1
+                        onActivated: index => { backend.selectResolution(index); liveVideo.forceActiveFocus() }
+                        Accessible.name: "Resolution"
                     }
                     SourceChoice {
                         id: microphoneChoice; iconPath: win.icons.microphone
