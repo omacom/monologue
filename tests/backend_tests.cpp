@@ -43,6 +43,17 @@ private slots:
         QCOMPARE(media::bestFormat({}),-1);
         QCOMPARE(media::targetFps(15,15),15.0);
     }
+    void resolutionRanking() {
+        // What the resolution selector offers: one entry per advertised size, largest first.
+        const QList<media::Format> f{{{1920,1080},30,60,0}, {{3840,2160},30,30,0}, {{1920,1080},60,60,0},
+                                     {{640,480},30,30,0}, {{2560,1440},24,24,0}, {{},30,30,0}};
+        QCOMPARE(media::rankedSizes(f),QList<QSize>({QSize(3840,2160),QSize(2560,1440),QSize(1920,1080),QSize(640,480)}));
+        QCOMPARE(media::bestFormatAt(f,QSize(1920,1080)),0); // 30 fps beats 60 fps at one resolution
+        QCOMPARE(media::bestFormatAt(f,QSize(2560,1440)),4);
+        QCOMPARE(media::bestFormatAt(f,QSize(1280,720)),-1);
+        QCOMPARE(media::bestFormatAt({},QSize(640,480)),-1);
+        QCOMPARE(media::rankedSizes({}),QList<QSize>());
+    }
     void clockExcludesPauses() {
         TakeClock c; c.start(1000000);
         QVERIFY(!c.position(999999));

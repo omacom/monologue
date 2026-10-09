@@ -26,6 +26,8 @@ QtObject {
     property string message: ""
     property string formatLabel: "3840 × 2160 · 30 fps recording"
     property var cameras: [{label: "Test camera"}]
+    property var cameraFormats: [{label: "Maximum · 3840 × 2160"}, {label: "1920 × 1080"}, {label: "1280 × 720"}]
+    property int cameraFormatIndex: 1
     property var microphones: [{label: "Test microphone"}]
     property int cameraIndex: 0
     property int microphoneIndex: 0
@@ -63,6 +65,7 @@ QtObject {
     function toggleRecording() { toggles++; state = state === "ready" || state === "paused" ? "recording" : "paused"; changed() }
     function finish() { state = "finished"; changed() }
     function selectCamera(i) {}
+    function selectCameraFormat(i) { cameraFormatIndex = i }
     function selectMicrophone(i) {}
     function newRecording() { newRecordings++; state = "ready"; changed() }
     function closeTake() {}

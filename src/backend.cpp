@@ -15,6 +15,7 @@
 #include <algorithm>
 
 static QString deviceId(const QByteArray &id) { return QString::fromLatin1(id.toBase64()); }
+static QString sizeText(const QSize &size) { return QString("%1 × %2").arg(size.width()).arg(size.height()); }
 static int indexOf(const QVariantList &list, const QString &id) {
     for (int i=0; i<list.size(); ++i) if (list[i].toMap()["id"].toString()==id) return i;
     return -1;
@@ -118,13 +119,27 @@ void Backend::activateSources() {
     if(!m_activateHardware) { m_state="unavailable"; emit changed(); return; }
     releaseSources();
     m_state="starting"; m_message.clear(); m_formatLabel.clear(); m_activatedAt=now();
+    m_cameraFormats.clear(); m_cameraFormatIndex=0;
     QCameraDevice selectedCamera;
     for(const auto &d:QMediaDevices::videoInputs()) if(deviceId(d.id())==m_cameraId) selectedCamera=d;
     QAudioDevice selectedAudio;
     for(const auto &d:QMediaDevices::audioInputs()) if(deviceId(d.id())==m_audioId) selectedAudio=d;
     if(selectedCamera.isNull()) { m_state="unavailable"; m_message="Connect a camera or choose an available video source."; }
     else {
-        m_cameraFormat=media::bestCameraFormat(selectedCamera);
+        const auto sizes=media::rankedResolutions(selectedCamera);
+        if(!sizes.isEmpty()) {
+            // Index 0 is the camera's maximum, kept as the default and as the fallback
+            // when a remembered resolution is no longer advertised.
+            m_cameraFormats.append(QVariantMap{{"id",QString()},{"label","Maximum ("+sizeText(sizes.first())+")"}});
+            for(int i=1;i<sizes.size();++i)
+                m_cameraFormats.append(QVariantMap{{"id",QString("%1x%2").arg(sizes[i].width()).arg(sizes[i].height())},
+                                                   {"label",sizeText(sizes[i])}});
+            const QString remembered=m_settings.value("camera/resolution").toString();
+            for(int i=1;i<m_cameraFormats.size();++i)
+                if(m_cameraFormats[i].toMap()["id"].toString()==remembered) m_cameraFormatIndex=i;
+            m_settings.setValue("camera/resolution",m_cameraFormats[m_cameraFormatIndex].toMap()["id"].toString());
+        }
+        m_cameraFormat=media::formatForResolution(selectedCamera,sizes.value(m_cameraFormatIndex));
         if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message="This camera advertises no supported video formats."; }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
@@ -150,6 +165,7 @@ void Backend::activateSources() {
     if(QStandardPaths::findExecutable("ffprobe").isEmpty() || QStandardPaths::findExecutable("ffmpeg").isEmpty()) { m_state="unavailable"; m_message="Install ffmpeg (including ffprobe) to record and inspect clips."; }
     else if(!Writer::supported(audioEnabled())) { m_state="unavailable"; m_message="This Qt multimedia backend cannot encode H.264 MP4 with the selected audio mode."; }
     emit changed();
+    emit devicesChanged();
 }
 void Backend::updateReady() {
     if(m_state=="starting" && m_cameraHealthy && (!audioEnabled() || m_audioHealthy)) {
@@ -160,7 +176,7 @@ void Backend::receiveVideo(const QVideoFrame &frame) {
     if(!m_camera || !frame.isValid()) return;
     m_lastVideoAt=now();
     if(frame.size()!=m_cameraFormat.resolution()) {
-        sourceFailed("The camera did not provide its maximum resolution. Choose another source or Retry."); return;
+        sourceFailed("The camera did not provide the selected resolution. Choose another one, or Retry."); return;
     }
     m_lastFrame=frame;
     // Once stopped, the preview holds the take's final frame while it finalizes.
@@ -225,6 +241,12 @@ void Backend::sourceFailed(const QString &message) {
 void Backend::selectCamera(int index) {
     if(m_writer || index<0 || index>=m_cameras.size() || m_state=="saving" || m_probing) return;
     m_cameraId=m_cameras[index].toMap()["id"].toString(); activateSources();
+}
+void Backend::selectCameraFormat(int index) {
+    if(m_writer || index<0 || index>=m_cameraFormats.size() || m_state=="saving" || m_probing) return;
+    if(m_settings.value("camera/resolution").toString()==m_cameraFormats[index].toMap()["id"].toString()) return;
+    m_settings.setValue("camera/resolution",m_cameraFormats[index].toMap()["id"].toString());
+    activateSources();
 }
 void Backend::selectMicrophone(int index) {
     if(m_writer || index<0 || index>=m_microphones.size() || m_state=="saving" || m_probing) return;

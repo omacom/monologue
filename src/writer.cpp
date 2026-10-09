@@ -144,7 +144,7 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     frame.setStreamFrameRate(m_fps);
     m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
-    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return; }
+    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this resolution, so the take was stopped. Try a smaller resolution."); return; }
     m_frames.enqueue(frame);
     drain();
 }

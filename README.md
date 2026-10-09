@@ -4,6 +4,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 
 - Remembers camera and microphone by device ID; missing inputs never silently switch.
 - Automatically selects the camera's maximum advertised video resolution, preferring 30 fps at that resolution. Preview preserves the whole frame.
+- Remembers the resolution you pick. The camera's maximum stays the default, and every other resolution it advertises is offered beside it, so a machine whose encoder cannot keep up with 4K can record at 1080p without a different camera or a hidden fallback.
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
@@ -65,9 +66,9 @@ Takes are recorded into the application's XDG data directory, normally `~/.local
 
 A take lives only as long as you're working on it: starting a new recording or quitting deletes it. If you haven't saved it since your last change, Monologue asks first, and offers to save. If Monologue is killed or crashes with a take open, the next launch reopens that take in the editor if it was last written less than an hour ago (its edits and pause marks are not kept); an older one is deleted. A take that can't be played back is deleted. Each take holds a lock while in use, so a second Monologue window never mistakes it for an interrupted one.
 
-Device IDs and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
+Device IDs, the chosen resolution, and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The resolution is remembered as `camera/resolution`, empty for the camera's maximum; a resolution the camera no longer advertises falls back to the maximum. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
 
-A disconnected source or encoder error stops the take and preserves its files. An unfinalized MP4 after a crash or power loss may not be playable. Maximum resolution is never silently reduced: if the device or encoder cannot sustain it, Monologue reports the problem.
+A disconnected source or encoder error stops the take and preserves its files. An unfinalized MP4 after a crash or power loss may not be playable. Resolution is never silently reduced: if the device cannot sustain the one you chose, or the encoder cannot keep up with it, Monologue reports the problem and the resolution selector stays available for the next take.
 
 ## Development and validation
 

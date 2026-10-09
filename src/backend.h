@@ -24,6 +24,8 @@ class Backend : public QObject {
     Q_PROPERTY(QString message READ message NOTIFY changed)
     Q_PROPERTY(QString formatLabel READ formatLabel NOTIFY changed)
     Q_PROPERTY(QVariantList cameras READ cameras NOTIFY devicesChanged)
+    Q_PROPERTY(QVariantList cameraFormats READ cameraFormats NOTIFY devicesChanged)
+    Q_PROPERTY(int cameraFormatIndex READ cameraFormatIndex NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList microphones READ microphones NOTIFY devicesChanged)
     Q_PROPERTY(int cameraIndex READ cameraIndex NOTIFY devicesChanged)
     Q_PROPERTY(int microphoneIndex READ microphoneIndex NOTIFY devicesChanged)
@@ -54,6 +56,9 @@ public:
     QString message() const { return m_message; }
     QString formatLabel() const { return m_formatLabel; }
     QVariantList cameras() const { return m_cameras; }
+    // Resolutions offered for the current camera, best first; the first is the camera's maximum.
+    QVariantList cameraFormats() const { return m_cameraFormats; }
+    int cameraFormatIndex() const { return m_cameraFormatIndex; }
     QVariantList microphones() const { return m_microphones; }
     int cameraIndex() const;
     int microphoneIndex() const;
@@ -78,6 +83,8 @@ public:
     edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
     Q_INVOKABLE void selectCamera(int index);
+    // Chooses one of the current camera's resolutions; index 0 is its maximum.
+    Q_INVOKABLE void selectCameraFormat(int index);
     Q_INVOKABLE void selectMicrophone(int index);
     Q_INVOKABLE void retry();
     Q_INVOKABLE void toggleRecording();
@@ -150,7 +157,8 @@ private:
     bool m_activateHardware;
     QString m_pendingDestination;
     Writer *m_writer = nullptr;
-    QVariantList m_cameras, m_microphones;
+    QVariantList m_cameras, m_microphones, m_cameraFormats;
+    int m_cameraFormatIndex = 0;
     QString m_cameraId, m_audioId, m_state = "starting", m_message, m_formatLabel;
     QString m_root, m_takeId, m_clipPath, m_clipFileName;
     QString m_interruption;

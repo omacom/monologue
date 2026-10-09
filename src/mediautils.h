@@ -10,6 +10,13 @@
 namespace media {
 struct Format { QSize size; double minFps; double maxFps; int pixelFormat; };
 int bestFormat(const QList<Format> &formats);
+// Every resolution a camera can deliver, most preferred first, largest first.
+QList<QSize> rankedSizes(const QList<Format> &formats);
+// Index of the best format at one resolution, or -1 when none is offered there.
+int bestFormatAt(const QList<Format> &formats, const QSize &size);
+QList<QSize> rankedResolutions(const QCameraDevice &device);
+// The best format at one advertised resolution, empty when the camera lacks it.
+QCameraFormat formatForResolution(const QCameraDevice &device, const QSize &size);
 QCameraFormat bestCameraFormat(const QCameraDevice &device);
 double targetFps(double minimum, double maximum);
 double peak(const QByteArray &data, const QAudioFormat &format);

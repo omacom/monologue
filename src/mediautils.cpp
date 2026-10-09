@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <cstdio>
+#include <algorithm>
 
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
@@ -28,12 +29,54 @@ int media::bestFormat(const QList<Format> &formats) {
     }
     return best;
 }
+QList<QSize> media::rankedSizes(const QList<Format> &formats) {
+    QList<QSize> sizes;
+    for (const auto &f : formats)
+        if (!f.size.isEmpty() && f.maxFps > 0 && f.minFps <= f.maxFps && !sizes.contains(f.size)) sizes.append(f.size);
+    // The same preference as bestFormat, applied one resolution at a time: area first,
+    // then the rate closest to 30 fps.
+    const auto rate = [&formats](const QSize &size) {
+        const int index = bestFormatAt(formats, size);
+        return index < 0 ? 0.0 : targetFps(formats[index].minFps, formats[index].maxFps);
+    };
+    std::sort(sizes.begin(), sizes.end(), [&rate](const QSize &a, const QSize &b) {
+        const qint64 areaA = qint64(a.width()) * a.height(), areaB = qint64(b.width()) * b.height();
+        if (areaA != areaB) return areaA > areaB;
+        const double rateA = rate(a), rateB = rate(b);
+        if (std::abs(rateA - 30) != std::abs(rateB - 30)) return std::abs(rateA - 30) < std::abs(rateB - 30);
+        return rateA < rateB;
+    });
+    return sizes;
+}
+int media::bestFormatAt(const QList<Format> &formats, const QSize &size) {
+    QList<Format> choices;
+    QList<int> indices;
+    for (int i = 0; i < formats.size(); ++i)
+        if (formats[i].size == size) { choices.append(formats[i]); indices.append(i); }
+    const int best = bestFormat(choices);
+    return best < 0 ? -1 : indices[best];
+}
 QCameraFormat media::bestCameraFormat(const QCameraDevice &device) {
+    const auto sizes = rankedResolutions(device);
+    return sizes.isEmpty() ? QCameraFormat() : formatForResolution(device, sizes.first());
+}
+QList<QSize> media::rankedResolutions(const QCameraDevice &device) {
+    QList<Format> choices;
+    for (const auto &f : device.videoFormats())
+        choices.append({f.resolution(), f.minFrameRate(), f.maxFrameRate(), int(f.pixelFormat())});
+    return rankedSizes(choices);
+}
+QCameraFormat media::formatForResolution(const QCameraDevice &device, const QSize &size) {
     const auto formats = device.videoFormats();
     QList<Format> choices;
-    for (const auto &f : formats) choices.append({f.resolution(), f.minFrameRate(), f.maxFrameRate(), int(f.pixelFormat())});
+    QList<int> indices;
+    for (int i = 0; i < formats.size(); ++i) {
+        if (formats[i].resolution() != size) continue;
+        choices.append({size, formats[i].minFrameRate(), formats[i].maxFrameRate(), int(formats[i].pixelFormat())});
+        indices.append(i);
+    }
     const int index = bestFormat(choices);
-    return index < 0 ? QCameraFormat() : formats[index];
+    return index < 0 ? QCameraFormat() : formats[indices[index]];
 }
 double media::peak(const QByteArray &data, const QAudioFormat &format) {
     double result = 0;
