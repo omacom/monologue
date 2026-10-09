@@ -4,14 +4,7 @@ set -eu
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BUILD_DIR="$ROOT/build"
 
-if command -v qmake6 >/dev/null 2>&1; then
-  QMAKE=qmake6
-elif command -v qmake >/dev/null 2>&1; then
-  QMAKE=qmake
-else
-  echo "qmake6 or qmake is required to build monologue." >&2
-  exit 1
-fi
+. "$ROOT/bin/qt-env"
 
 if command -v nproc >/dev/null 2>&1; then
   JOBS="$(nproc)"
@@ -24,7 +17,7 @@ fi
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-"$QMAKE" "$ROOT/monologue.pro"
+"$QMAKE" "QMAKE_PKG_CONFIG=$PKG_CONFIG" "$ROOT/monologue.pro"
 make -j"$JOBS"
 
 echo "Built $BUILD_DIR/monologue"
