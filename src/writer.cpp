@@ -1,7 +1,5 @@
 #include "writer.h"
 #include "mediautils.h"
-#include <QMediaFormat>
-#include <QUrl>
 #include <QAbstractVideoBuffer>
 #include <QtConcurrent>
 #include <limits>
@@ -77,48 +75,26 @@ QList<qint64> TakeClock::joins() const {
 }
 
 Writer::Writer(QObject *parent) : QObject(parent) {
-    m_session.setRecorder(&m_recorder);
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
-    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail("The encoder stopped responding, so the take was stopped."); });
-    connect(&m_recorder, &QMediaRecorder::errorOccurred, this, [this](auto, const QString &message) { fail(message); });
-    connect(&m_recorder, &QMediaRecorder::recorderStateChanged, this, [this](auto state) {
-        if (state == QMediaRecorder::StoppedState && m_stopping) {
-            m_flushTimeout.stop();
-            emit finished();
-        }
+    connect(&m_flushTimeout, &QTimer::timeout, this, [this] {
+        if (!m_failed) { m_failed = true; emit failed("The encoder stopped responding, so the take was stopped."); }
+        emitFinished();
     });
 }
-static QMediaFormat recordingFormat(bool audio) {
-    QMediaFormat f(QMediaFormat::MPEG4);
-    f.setVideoCodec(QMediaFormat::VideoCodec::H264);
-    if (audio) f.setAudioCodec(QMediaFormat::AudioCodec::AAC);
-    return f;
-}
-bool Writer::supported(bool audio) { return recordingFormat(audio).isSupported(QMediaFormat::Encode); }
+Writer::~Writer() = default;
+bool Writer::supported(bool audio) { return Encoder::supported(audio); }
 bool Writer::start(const QString &path, const QVideoFrameFormat &format,
                    double fps, const QAudioFormat &audioFormat, qint64 now) {
     m_clock.start(now);
     m_frameDuration = qRound64(1000000.0 / fps);
     m_fps = fps;
     m_audioFormat = audioFormat;
-    // Let the first frame initialize the encoder. Supplying a format hint can
-    // leave Qt 6.11's canPushFrame cache false before its worker starts.
-    m_video = new QVideoFrameInput(this);
-    m_session.setVideoFrameInput(m_video);
-    connect(m_video, &QVideoFrameInput::readyToSendVideoFrame, this, &Writer::drain);
-    if (audioFormat.isValid()) {
-        m_audio = new QAudioBufferInput(this);
-        m_session.setAudioBufferInput(m_audio);
-        connect(m_audio, &QAudioBufferInput::readyToSendAudioBuffer, this, &Writer::drain);
-    }
-    m_recorder.setMediaFormat(recordingFormat(audioFormat.isValid()));
-    m_recorder.setVideoResolution(format.frameSize());
-    m_recorder.setVideoFrameRate(fps);
-    m_recorder.setQuality(QMediaRecorder::VeryHighQuality);
-    m_recorder.setAudioBitRate(192000);
-    m_recorder.setOutputLocation(QUrl::fromLocalFile(path));
-    m_recorder.record();
+    m_encoder = std::make_unique<Encoder>();
+    const auto error = m_encoder->open({path, format.frameSize(), fps, audioFormat}, [this](const QString &message) {
+        QMetaObject::invokeMethod(this, [this, message] { fail(message); }, Qt::QueuedConnection);
+    });
+    if (!error.isEmpty()) { m_encoder.reset(); fail(error); }
     return !m_failed;
 }
 void Writer::pause(qint64 now) {
@@ -142,7 +118,9 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     m_tailFrame = frame;
     m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
-    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return; }
+    if (m_frames.size() + m_encoder->queuedFrames() >= 8) {
+        fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return;
+    }
     const auto stamp = [timestamp, end = qRound64((frameIndex + 1) * 1000000.0 / m_fps), fps = m_fps](QVideoFrame frame) {
         frame.setStartTime(timestamp);
         frame.setEndTime(end);
@@ -164,7 +142,7 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     decoded.then(this, [this](const QVideoFrame &) { drain(); });
 }
 void Writer::audio(QByteArray data, qint64 capturedAt) {
-    if (m_stopping || m_failed || !m_audio || data.isEmpty()) return;
+    if (m_stopping || m_failed || !m_audioFormat.isValid() || data.isEmpty()) return;
     const qint64 end = capturedAt + m_audioFormat.durationForBytes(data.size());
     const int frameBytes = m_audioFormat.bytesPerFrame();
     // Select by capture time, including closed intervals. A late buffer may
@@ -177,8 +155,8 @@ void Writer::audio(QByteArray data, qint64 capturedAt) {
         const qint64 last = sampleAtOrAfter(span.end - capturedAt);
         QByteArray part = data.mid(first * frameBytes, (last - first) * frameBytes);
         const auto position = span.position + m_audioFormat.durationForFrames(first) - (span.begin - capturedAt);
-        // Qt counts audio samples rather than honoring PTS. Materialize capture
-        // gaps as silence and trim overlaps, keeping the original event times.
+        // The encoder counts audio samples rather than honoring PTS. Materialize
+        // capture gaps as silence and trim overlaps, keeping the original event times.
         const qint64 desiredFrame = qRound64(position * m_audioFormat.sampleRate() / 1000000.0);
         if (desiredFrame < m_audioFramesWritten) {
             const auto overlap = (m_audioFramesWritten - desiredFrame) * frameBytes;
@@ -188,7 +166,7 @@ void Writer::audio(QByteArray data, qint64 capturedAt) {
     }
 }
 void Writer::padAudioTo(qint64 time) {
-    if (!m_audio || m_failed) return;
+    if (!m_audioFormat.isValid() || m_failed) return;
     const qint64 missing = qRound64(time * m_audioFormat.sampleRate() / 1000000.0) - m_audioFramesWritten;
     if (missing <= 0) return;
     if (m_audioFormat.durationForFrames(missing) > 500000) {
@@ -199,29 +177,18 @@ void Writer::padAudioTo(qint64 time) {
 }
 void Writer::appendAudio(const QByteArray &data) {
     if (m_failed) return;
-    QAudioBuffer buffer(data, m_audioFormat, m_audioFormat.durationForFrames(m_audioFramesWritten));
-    m_audioFramesWritten += buffer.frameCount();
-    m_queuedAudioUs += buffer.duration();
-    if (m_queuedAudioUs > 500000) { fail("Audio encoding cannot keep up, so the take was stopped."); return; }
-    m_buffers.enqueue(buffer);
-    drain();
+    if (m_encoder->queuedAudioUs() > 500000) { fail("Audio encoding cannot keep up, so the take was stopped."); return; }
+    m_audioFramesWritten += m_audioFormat.framesForBytes(data.size());
+    m_encoder->audio(data);
 }
 void Writer::drain() {
-    if (m_draining || m_failed) return;
-    m_draining = true;
-    bool undecodable = false;
+    if (m_failed || m_closing) return;
     while (!m_frames.isEmpty() && m_frames.head().isFinished()) {
-        const auto frame = m_frames.head().result();
-        if (!frame.isValid()) { undecodable = true; break; }
-        if (!m_video->sendVideoFrame(frame)) break;
-        m_frames.dequeue();
+        const auto frame = m_frames.dequeue().result();
+        if (!frame.isValid()) { fail("A camera frame could not be decoded, so the take was stopped."); return; }
+        m_encoder->video(frame);
     }
-    while (!m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
-        m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
-    }
-    m_draining = false;
-    if (undecodable) { fail("A camera frame could not be decoded, so the take was stopped."); return; }
-    if (m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();
+    if (m_stopping && m_frames.isEmpty()) close(false);
 }
 void Writer::finish() {
     if (m_stopping) return;
@@ -236,18 +203,30 @@ void Writer::finish() {
     m_stopping = true;
     m_flushTimeout.start();
     drain();
-    if (m_recorder.recorderState() == QMediaRecorder::StoppedState) {
-        m_flushTimeout.stop();
-        QTimer::singleShot(0, this, &Writer::finished);
-    }
+}
+void Writer::close(bool discard) {
+    if (m_closing) return;
+    m_closing = true;
+    if (!m_encoder) { QTimer::singleShot(0, this, &Writer::emitFinished); return; }
+    m_encoder->finish(discard, [this](const QString &error) {
+        QMetaObject::invokeMethod(this, [this, error] {
+            if (!error.isEmpty() && !m_failed) { m_failed = true; emit failed(error); }
+            emitFinished();
+        }, Qt::QueuedConnection);
+    });
+}
+void Writer::emitFinished() {
+    m_flushTimeout.stop();
+    if (m_finished) return;
+    m_finished = true;
+    emit finished();
 }
 void Writer::fail(const QString &message) {
     if (m_failed) return;
     m_failed = true;
     m_stopping = true;
     emit failed(message);
-    m_frames.clear(); m_buffers.clear();
-    m_recorder.stop();
-    if (m_recorder.recorderState() == QMediaRecorder::StoppedState)
-        QTimer::singleShot(0, this, &Writer::finished);
+    m_frames.clear();
+    // Keep what was already encoded: the file is still closed as a valid MP4.
+    close(true);
 }
