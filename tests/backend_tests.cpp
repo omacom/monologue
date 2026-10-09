@@ -324,6 +324,26 @@ private slots:
         QCOMPARE(backend.clips().size(),1);
         backend.closeTake();
     }
+    void jitteryCameraKeepsEveryFrame() {
+        // A 30 fps camera whose frames fall midway between output slots, with
+        // the alternating 28/36 ms intervals real webcams show.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("jitter.mp4");
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(64,64),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0));
+        QImage image(64,64,QImage::Format_RGB32); image.fill(Qt::gray);
+        qint64 captured=15000;
+        for(int i=0;i<60;++i) {
+            writer.video(QVideoFrame(image),captured);
+            captured+=(i%3==2)?28000:36000;
+            QTest::qWait(5);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess streams; streams.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=nb_frames","-of","csv=p=0",path});
+        QVERIFY(streams.waitForFinished());
+        QCOMPARE(streams.readAllStandardOutput().trimmed().toInt(),60);
+    }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;
         const auto path=directory.filePath("sync.mp4");
