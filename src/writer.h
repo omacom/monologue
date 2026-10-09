@@ -5,6 +5,7 @@
 #include <QMediaCaptureSession>
 #include <QMediaRecorder>
 #include <QVideoFrame>
+#include <QFuture>
 #include <QQueue>
 #include <QTimer>
 #include <optional>
@@ -58,7 +59,8 @@ private:
     QVideoFrameInput *m_video = nullptr;
     QAudioBufferInput *m_audio = nullptr;
     QAudioFormat m_audioFormat;
-    QQueue<QVideoFrame> m_frames;
+    // In capture order; JPEG frames resolve once decoded off the GUI thread.
+    QQueue<QFuture<QVideoFrame>> m_frames;
     QVideoFrame m_tailFrame;
     QQueue<QAudioBuffer> m_buffers;
     QTimer m_flushTimeout;
