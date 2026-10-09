@@ -2,14 +2,96 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-PKGBUILD_DIR="$ROOT/pkgbuild"
 
-if ! command -v makepkg >/dev/null 2>&1; then
-  echo "makepkg is required to build and install the Arch package." >&2
+# Allow an alternate os-release file for sandboxed installer tests.
+OS_RELEASE="${MONOLOGUE_OS_RELEASE:-/etc/os-release}"
+if [ -z "${MONOLOGUE_OS_RELEASE:-}" ] && [ ! -r "$OS_RELEASE" ]; then
+  OS_RELEASE=/usr/lib/os-release
+fi
+if [ ! -r "$OS_RELEASE" ]; then
+  echo "Cannot detect the distribution. Build manually with ./bin/build." >&2
   exit 1
 fi
+ID=
+ID_LIKE=
+. "$OS_RELEASE"
+
+case " $ID $ID_LIKE " in
+  *" arch "*)
+    if ! command -v makepkg >/dev/null 2>&1; then
+      echo "makepkg is required to build and install the Arch package." >&2
+      exit 1
+    fi
+    "$ROOT/bin/build"
+    cd "$ROOT/pkgbuild"
+    exec makepkg -fsi "$@"
+    ;;
+  *" fedora "*)
+    if [ "$#" -ne 0 ]; then
+      echo "The Fedora installer takes no arguments; makepkg options are Arch-only." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unsupported distribution: ${ID:-unknown}. Build manually with ./bin/build." >&2
+    exit 1
+    ;;
+esac
+
+fedora_build_error() {
+  echo "$1" >&2
+  echo "Install Fedora build dependencies, then run ./bin/install again:" >&2
+  echo "  sudo dnf --refresh --setopt=install_weak_deps=False install gcc-c++ make pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel pulseaudio-libs-devel" >&2
+  exit 1
+}
+
+for tool in g++ make; do
+  command -v "$tool" >/dev/null 2>&1 || fedora_build_error "$tool is required to build monologue."
+done
+if ! . "$ROOT/bin/qt-env"; then
+  fedora_build_error "Qt build tools are required to build monologue."
+fi
+if ! "$PKG_CONFIG" --print-errors --exists 'Qt6Core >= 6.8' Qt6Gui Qt6Qml Qt6Quick Qt6QuickControls2 Qt6Multimedia Qt6DBus Qt6Concurrent libpulse; then
+  echo "Checked development files with $PKG_CONFIG." >&2
+  fedora_build_error "Qt 6.8 or newer (including Declarative and Multimedia) and libpulse development files are required."
+fi
+
+case "${HOME:-}" in
+  /*) ;;
+  *) echo "HOME must be an absolute path for a user-local install." >&2; exit 1 ;;
+esac
+BIN_DIR="$HOME/.local/bin"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+case "$DATA_HOME" in
+  /*) ;;
+  *) echo "XDG_DATA_HOME must be an absolute path." >&2; exit 1 ;;
+esac
 
 "$ROOT/bin/build"
 
-cd "$PKGBUILD_DIR"
-exec makepkg -fsi "$@"
+# Desktop entries have their own quoting rules, separate from shell quoting.
+# Escape both the string and Exec layers, and protect literal % field codes.
+desktop_exec="$(printf '%s' "$BIN_DIR/monologue" | sed \
+  -e 's/\\/\\\\\\\\/g' -e 's/"/\\\\"/g' -e 's/`/\\\\`/g' \
+  -e 's/\$/\\\\$/g' -e 's/%/%%/g')"
+desktop_file="$(mktemp "$ROOT/build/monologue.desktop.XXXXXX")"
+trap 'rm -f "$desktop_file"' 0
+trap 'exit 1' 1 2 15
+while IFS= read -r line; do
+  case "$line" in
+    Exec=*) printf 'Exec="%s"\n' "$desktop_exec" ;;
+    *) printf '%s\n' "$line" ;;
+  esac
+done < "$ROOT/pkgbuild/monologue.desktop" > "$desktop_file"
+
+install -Dm755 "$ROOT/build/monologue" "$BIN_DIR/monologue"
+install -Dm644 "$desktop_file" "$DATA_HOME/applications/monologue.desktop"
+install -Dm644 "$ROOT/pkgbuild/monologue.svg" "$DATA_HOME/icons/hicolor/scalable/apps/monologue.svg"
+install -Dm644 "$ROOT/LICENSE" "$DATA_HOME/licenses/monologue/LICENSE"
+
+echo "Installed $BIN_DIR/monologue"
+echo "Launch Monologue from your desktop's application menu."
+case ":${PATH:-}:" in
+  *":$BIN_DIR:"*) echo "Or run monologue from a terminal." ;;
+  *) echo "Add $BIN_DIR to PATH to run monologue from a terminal." ;;
+esac

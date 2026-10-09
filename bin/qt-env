@@ -1,0 +1,31 @@
+# Sourced by build/install/test scripts; explicit tool overrides are respected.
+if [ -z "${QMAKE:-}" ]; then
+  if command -v qmake6 >/dev/null 2>&1; then
+    QMAKE="$(command -v qmake6)"
+  elif command -v qmake >/dev/null 2>&1; then
+    QMAKE="$(command -v qmake)"
+  else
+    echo "qmake6 or qmake is required to build monologue." >&2
+    return 1
+  fi
+fi
+if ! command -v "$QMAKE" >/dev/null 2>&1; then
+  echo "Cannot find qmake: $QMAKE" >&2
+  return 1
+fi
+
+if [ -z "${PKG_CONFIG:-}" ]; then
+  QT_HOST_PREFIX="$("$QMAKE" -query QT_HOST_PREFIX)" || return 1
+  # Match Qt's toolchain rather than accidentally using Homebrew's pkg-config
+  # with Fedora's Qt (Homebrew does not search /usr/lib64/pkgconfig).
+  if [ -n "$QT_HOST_PREFIX" ] && [ -x "$QT_HOST_PREFIX/bin/pkg-config" ]; then
+    PKG_CONFIG="$QT_HOST_PREFIX/bin/pkg-config"
+  else
+    PKG_CONFIG=pkg-config
+  fi
+fi
+if ! command -v "$PKG_CONFIG" >/dev/null 2>&1; then
+  echo "Cannot find pkg-config: $PKG_CONFIG" >&2
+  return 1
+fi
+export QMAKE PKG_CONFIG
