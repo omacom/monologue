@@ -75,6 +75,18 @@ The build and test scripts select `pkg-config` from Qt's host prefix when availa
 PKG_CONFIG=/usr/bin/pkg-config ./bin/install
 ```
 
+### Uninstall
+
+Run the uninstaller as your normal user:
+
+```sh
+./bin/uninstall
+```
+
+On Arch / Omarchy, it removes only the `monologue` package through `sudo pacman -R`, leaving dependencies installed. On Fedora, run it **without sudo**: it removes the user-local binary, desktop launcher, icon, and license. If you installed with a custom `XDG_DATA_HOME`, use the same value when uninstalling. Missing files are harmless, so the Fedora uninstaller can be run repeatedly.
+
+The script takes no arguments and preserves settings, recordings, saved videos, build output, and unrelated files. Fedora cleanup leaves directories in place.
+
 ## Shortcuts
 
 | Key | Action |
@@ -125,7 +137,7 @@ The test runner requires Python 3 in addition to the build dependencies.
 ./bin/test
 ```
 
-Installer regression tests can also run independently, with only Python 3 and standard shell tools:
+Installer and uninstaller regression tests can also run independently, with only Python 3 and standard shell tools:
 
 ```sh
 python3 tests/install_tests.py

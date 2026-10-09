@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the real installer without compiling or modifying the user's home."""
+"""Exercise install/uninstall without compiling or modifying the user's home."""
 
 import os
 from pathlib import Path
@@ -30,6 +30,7 @@ class InstallTests(unittest.TestCase):
         self.tools.mkdir()
         self.home.mkdir()
         shutil.copy2(str(ROOT / "bin/install"), str(self.project / "bin/install"))
+        shutil.copy2(str(ROOT / "bin/uninstall"), str(self.project / "bin/uninstall"))
         shutil.copy2(str(ROOT / "bin/qt-env"), str(self.project / "bin/qt-env"))
         for filename in ("PKGBUILD", "monologue.desktop", "monologue.svg"):
             shutil.copy2(str(ROOT / "pkgbuild" / filename), str(self.project / "pkgbuild" / filename))
@@ -57,6 +58,17 @@ class InstallTests(unittest.TestCase):
             'for arg do printf "<%s>\\n" "$arg" >> "$TEST_LOG"; done\n'
             'exit "${TEST_MAKEPKG_STATUS:-0}"\n',
         )
+        self.write_script(self.tools / "id", 'printf "%s\\n" "${TEST_UID:-1000}"\n')
+        self.write_script(
+            self.tools / "pacman",
+            'printf "pacman\\n" >> "$TEST_LOG"\n'
+            'for arg do printf "<%s>\\n" "$arg" >> "$TEST_LOG"; done\n'
+            'exit "${TEST_PACMAN_STATUS:-0}"\n',
+        )
+        self.write_script(
+            self.tools / "sudo",
+            'printf "sudo\\n" >> "$TEST_LOG"\nexec "$@"\n',
+        )
         self.write_script(
             self.project / "bin/build",
             'printf "build\\n" >> "$TEST_LOG"\n'
@@ -67,7 +79,7 @@ class InstallTests(unittest.TestCase):
             'chmod 755 "$TEST_PROJECT/build/monologue"\n',
         )
         self.environment = os.environ.copy()
-        for name in ("QMAKE", "PKG_CONFIG", "XDG_DATA_HOME", "TEST_BUILD_STATUS", "TEST_PKG_CONFIG_STATUS", "TEST_MAKEPKG_STATUS"):
+        for name in ("QMAKE", "PKG_CONFIG", "XDG_DATA_HOME", "TEST_BUILD_STATUS", "TEST_PKG_CONFIG_STATUS", "TEST_MAKEPKG_STATUS", "TEST_UID", "TEST_PACMAN_STATUS"):
             self.environment.pop(name, None)
         self.environment.update(
             HOME=str(self.home),
@@ -374,6 +386,149 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Cannot detect the distribution", result.stderr)
         self.assert_not_built()
+
+    def test_fedora_uninstall_removes_only_installed_files(self):
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.log.unlink()
+        data_home = self.home / ".local/share"
+        installed = (
+            self.home / ".local/bin/monologue",
+            data_home / "applications/monologue.desktop",
+            data_home / "icons/hicolor/scalable/apps/monologue.svg",
+            data_home / "licenses/monologue/LICENSE",
+        )
+        preserved = (
+            self.home / ".local/bin/another-app",
+            data_home / "applications/another-app.desktop",
+            data_home / "licenses/monologue/another-file",
+            data_home / "omacom/monologue/recordings/take/original.mp4",
+            self.home / ".config/omacom/monologue.conf",
+            self.home / "Videos/saved.mp4",
+        )
+        for path in preserved:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("keep me")
+        result = self.run_script("uninstall")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for path in installed:
+            self.assertFalse(path.exists())
+            self.assertTrue(path.parent.is_dir())
+        for path in preserved:
+            self.assertEqual(path.read_text(), "keep me")
+        self.assertTrue((self.project / "build/monologue").exists())
+        self.assertFalse(self.log.exists())
+
+    def test_fedora_uninstall_custom_and_empty_data_home(self):
+        for value in (str(self.directory / "custom data"), ""):
+            with self.subTest(data_home=value):
+                self.environment["XDG_DATA_HOME"] = value
+                result = self.run_install()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data_home = Path(value) if value else self.home / ".local/share"
+                result = self.run_script("uninstall")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((self.home / ".local/bin/monologue").exists())
+                self.assertFalse((data_home / "applications/monologue.desktop").exists())
+                self.assertFalse((data_home / "icons/hicolor/scalable/apps/monologue.svg").exists())
+                self.assertFalse((data_home / "licenses/monologue/LICENSE").exists())
+
+    def test_fedora_uninstall_is_idempotent_without_build_tools(self):
+        for tool in ("g++", "make", "qmake6", "pkg-config", "makepkg", "pacman", "sudo"):
+            (self.tools / tool).unlink()
+        for _ in range(2):
+            result = self.run_script("uninstall")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_not_built()
+        self.assertFalse((self.home / ".local").exists())
+
+    def test_fedora_derivative_uninstall(self):
+        self.set_distribution("derivative", "rhel fedora")
+        result = self.run_script("uninstall")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_not_built()
+
+    def test_fedora_uninstall_rejects_root_and_invalid_paths(self):
+        binary = self.home / ".local/bin/monologue"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("keep me")
+        cases = (
+            ("TEST_UID", "0", "without sudo"),
+            ("HOME", "", "HOME must be an absolute path"),
+            ("HOME", "relative/home", "HOME must be an absolute path"),
+            ("XDG_DATA_HOME", "relative/data", "XDG_DATA_HOME must be an absolute path"),
+        )
+        for name, value, message in cases:
+            with self.subTest(name=name, value=value):
+                environment = self.environment.copy()
+                self.environment[name] = value
+                try:
+                    result = self.run_script("uninstall")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+                    self.assertEqual(binary.read_text(), "keep me")
+                    self.assertFalse(self.log.exists())
+                finally:
+                    self.environment = environment
+
+    def test_arch_uninstall_uses_pacman_without_removing_dependencies(self):
+        for identifier, like, uid, expected in (
+            ("arch", "", "1000", "sudo\npacman\n<-R>\n<-->\n<monologue>\n"),
+            ("omarchy", "arch", "0", "pacman\n<-R>\n<-->\n<monologue>\n"),
+        ):
+            with self.subTest(distribution=identifier, uid=uid):
+                self.set_distribution(identifier, like)
+                self.environment["TEST_UID"] = uid
+                result = self.run_script("uninstall")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.log.read_text(), expected)
+                self.log.unlink()
+                self.assert_not_built()
+
+    def test_arch_uninstall_requires_pacman_and_sudo(self):
+        self.set_distribution("arch")
+        for tool in ("pacman", "sudo"):
+            with self.subTest(tool=tool):
+                path = self.tools / tool
+                backup = self.tools / (tool + ".disabled")
+                path.rename(backup)
+                try:
+                    result = self.run_script("uninstall")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(tool, result.stderr)
+                    self.assert_not_built()
+                finally:
+                    backup.rename(path)
+
+    def test_arch_uninstall_propagates_pacman_failure(self):
+        self.set_distribution("arch")
+        self.environment["TEST_PACMAN_STATUS"] = "9"
+        self.assertEqual(self.run_script("uninstall").returncode, 9)
+
+    def test_uninstall_rejects_arguments_before_removing_files(self):
+        binary = self.home / ".local/bin/monologue"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("keep me")
+        result = self.run_script("uninstall", "--purge")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no arguments", result.stderr)
+        self.assertEqual(binary.read_text(), "keep me")
+        self.assertFalse(self.log.exists())
+
+    def test_uninstall_rejects_unsupported_or_missing_distribution(self):
+        binary = self.home / ".local/bin/monologue"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("keep me")
+        self.set_distribution("debian")
+        result = self.run_script("uninstall")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported distribution: debian", result.stderr)
+        self.os_release.unlink()
+        result = self.run_script("uninstall")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Cannot detect the distribution", result.stderr)
+        self.assertEqual(binary.read_text(), "keep me")
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":
