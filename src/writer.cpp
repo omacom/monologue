@@ -1,7 +1,9 @@
 #include "writer.h"
+#include "mediautils.h"
 #include <QMediaFormat>
 #include <QUrl>
 #include <QAbstractVideoBuffer>
+#include <QtConcurrent>
 #include <limits>
 
 namespace {
@@ -138,15 +140,28 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     const qint64 timestamp = qRound64(frameIndex * 1000000.0 / m_fps);
     if (timestamp <= m_lastVideo) return;
     m_tailFrame = frame;
-    frame = QVideoFrame(std::make_unique<FrameBuffer>(frame));
-    frame.setStartTime(timestamp);
-    frame.setEndTime(qRound64((frameIndex + 1) * 1000000.0 / m_fps));
-    frame.setStreamFrameRate(m_fps);
     m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
     if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return; }
-    m_frames.enqueue(frame);
-    drain();
+    const auto stamp = [timestamp, end = qRound64((frameIndex + 1) * 1000000.0 / m_fps), fps = m_fps](QVideoFrame frame) {
+        frame.setStartTime(timestamp);
+        frame.setEndTime(end);
+        frame.setStreamFrameRate(fps);
+        return frame;
+    };
+    if (frame.pixelFormat() != QVideoFrameFormat::Format_Jpeg) {
+        m_frames.enqueue(QtFuture::makeReadyValueFuture(stamp(QVideoFrame(std::make_unique<FrameBuffer>(frame)))));
+        drain();
+        return;
+    }
+    auto decoded = QtConcurrent::run([frame, stamp]() mutable {
+        if (!frame.map(QVideoFrame::ReadOnly)) return QVideoFrame();
+        auto result = media::decodeJpeg(QByteArrayView(frame.bits(0), frame.mappedBytes(0)));
+        frame.unmap();
+        return result.isValid() ? stamp(result) : result;
+    });
+    m_frames.enqueue(decoded);
+    decoded.then(this, [this](const QVideoFrame &) { drain(); });
 }
 void Writer::audio(QByteArray data, qint64 capturedAt) {
     if (m_stopping || m_failed || !m_audio || data.isEmpty()) return;
@@ -194,11 +209,18 @@ void Writer::appendAudio(const QByteArray &data) {
 void Writer::drain() {
     if (m_draining || m_failed) return;
     m_draining = true;
-    while (!m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) m_frames.dequeue();
+    bool undecodable = false;
+    while (!m_frames.isEmpty() && m_frames.head().isFinished()) {
+        const auto frame = m_frames.head().result();
+        if (!frame.isValid()) { undecodable = true; break; }
+        if (!m_video->sendVideoFrame(frame)) break;
+        m_frames.dequeue();
+    }
     while (!m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
         m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
     }
     m_draining = false;
+    if (undecodable) { fail("A camera frame could not be decoded, so the take was stopped."); return; }
     if (m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();
 }
 void Writer::finish() {

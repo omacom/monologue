@@ -12,7 +12,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 
 ## Build and run
 
-Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer), `libpulse`, and `ffmpeg`. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
+Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer), `libpulse`, `libjpeg-turbo`, and `ffmpeg`. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
 
 ```sh
 ./bin/build
@@ -75,7 +75,7 @@ A disconnected source or encoder error stops the take and preserves its files. A
 ./bin/test
 ```
 
-Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
+Tests cover format ranking, camera JPEG decoding, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
 
 The recording engine forwards native camera frames and one shared microphone PCM stream to timestamped Qt inputs. Microphone timestamps account for the audio server's measured capture latency, including buffered samples. The writer removes paused intervals by capture time and accepts delayed samples from before Pause or Finish. Finish briefly waits for those samples before closing the recording. Qt's audio encoder counts samples, so the writer pads genuine capture gaps and trims overlaps to maintain the common timeline. Preview and metering remain live while paused. Finish remuxes the MP4 without re-encoding to normalize packet durations and put playback metadata at the front of the file.
 
