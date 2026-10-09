@@ -84,6 +84,19 @@ class InstallTests(unittest.TestCase):
         path.write_text("#!/bin/sh\nset -eu\n" + body)
         path.chmod(0o755)
 
+    def use_real_build(self):
+        # Mock make instead so tool selection runs through the actual build script.
+        shutil.copy2(str(self.project / "bin/build"), str(self.tools / "make"))
+        shutil.copy2(str(ROOT / "bin/build"), str(self.project / "bin/build"))
+
+    def use_custom_qmake(self):
+        custom = self.directory / "custom qt/bin/qmake"
+        custom.parent.mkdir(parents=True)
+        shutil.copy2(str(self.tools / "qmake6"), str(custom))
+        (self.tools / "qmake6").unlink()
+        self.environment["QMAKE"] = str(custom)
+        return custom
+
     def set_distribution(self, identifier, like=""):
         self.os_release.write_text('ID="{}"\nID_LIKE="{}"\n'.format(identifier, like))
 
@@ -177,8 +190,16 @@ class InstallTests(unittest.TestCase):
         self.assertIn("takes no arguments", result.stderr)
         self.assert_not_built()
 
-    def test_missing_build_tools_report_fedora_dependencies(self):
+    def test_installer_delegates_dependency_checks_to_build(self):
         for tool in ("g++", "make", "pkg-config", "qmake6"):
+            (self.tools / tool).unlink()
+        result = self.run_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installation(self.home / ".local/share")
+
+    def test_missing_build_tools_report_fedora_dependencies(self):
+        self.use_real_build()
+        for tool in ("make", "pkg-config", "qmake6"):
             with self.subTest(tool=tool):
                 path = self.tools / tool
                 backup = self.tools / (tool + ".disabled")
@@ -195,12 +216,14 @@ class InstallTests(unittest.TestCase):
                     backup.rename(path)
 
     def test_qmake_fallback(self):
+        self.use_real_build()
         (self.tools / "qmake6").rename(self.tools / "qmake")
         result = self.run_install()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_installation(self.home / ".local/share")
 
     def test_qt_pkg_config_takes_precedence_over_path(self):
+        self.use_real_build()
         native = self.qt_prefix / "bin/pkg-config"
         native.parent.mkdir(parents=True)
         self.write_script(native, "exit 0\n")
@@ -211,6 +234,7 @@ class InstallTests(unittest.TestCase):
         self.assert_installation(self.home / ".local/share")
 
     def test_explicit_pkg_config_override(self):
+        self.use_real_build()
         native = self.qt_prefix / "bin/pkg-config"
         native.parent.mkdir(parents=True)
         self.write_script(native, "exit 1\n")
@@ -224,6 +248,7 @@ class InstallTests(unittest.TestCase):
         self.assert_installation(self.home / ".local/share")
 
     def test_missing_pkg_config_override(self):
+        self.use_real_build()
         self.environment["PKG_CONFIG"] = str(self.directory / "missing-pkg-config")
         result = self.run_install()
         self.assertNotEqual(result.returncode, 0)
@@ -232,11 +257,11 @@ class InstallTests(unittest.TestCase):
         self.assert_not_built()
 
     def test_build_passes_selected_pkg_config_to_qmake(self):
+        self.use_real_build()
         native = self.qt_prefix / "bin/pkg-config"
         native.parent.mkdir(parents=True)
         self.write_script(native, "exit 0\n")
         self.write_script(self.tools / "pkg-config", "exit 1\n")
-        shutil.copy2(str(ROOT / "bin/build"), str(self.project / "bin/build"))
         result = self.run_script("build")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
@@ -245,11 +270,35 @@ class InstallTests(unittest.TestCase):
         )
         self.assertFalse((self.home / ".local").exists())
 
-    def test_missing_development_files(self):
-        self.environment["TEST_PKG_CONFIG_STATUS"] = "1"
+    def test_custom_qmake_does_not_require_system_qt_pkg_config_metadata(self):
+        self.use_real_build()
+        self.use_custom_qmake()
+        self.write_script(
+            self.tools / "pkg-config", 'printf "pkg-config\\n" >> "$TEST_LOG"\nexit 1\n'
+        )
         result = self.run_install()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Qt 6.8 or newer", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.qmake_arguments.read_text().splitlines(),
+            ["QMAKE_PKG_CONFIG=pkg-config", str(self.project / "monologue.pro")],
+        )
+        self.assert_installation(self.home / ".local/share")
+
+    def test_custom_qmake_failure_reports_build_diagnostic_and_fedora_hint(self):
+        self.use_real_build()
+        custom = self.use_custom_qmake()
+        self.write_script(
+            custom,
+            'if [ "$1" = "-query" ]; then\n'
+            '  printf "%s\\n" "$TEST_QT_PREFIX"\n'
+            'else\n'
+            '  echo "Project ERROR: Unknown module(s) in QT: multimedia" >&2\n'
+            '  exit 3\n'
+            'fi\n',
+        )
+        result = self.run_install()
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("Project ERROR: Unknown module(s) in QT: multimedia", result.stderr)
         self.assertIn("pulseaudio-libs-devel", result.stderr)
         self.assertIn("--setopt=install_weak_deps=False", result.stderr)
         self.assert_not_built()
@@ -277,6 +326,7 @@ class InstallTests(unittest.TestCase):
         self.environment["TEST_BUILD_STATUS"] = "7"
         result = self.run_install()
         self.assertEqual(result.returncode, 7)
+        self.assertIn("sudo dnf", result.stderr)
         self.assertEqual(binary.read_text(), "old binary")
         self.assertFalse((self.home / ".local/share/applications/monologue.desktop").exists())
 

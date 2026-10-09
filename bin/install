@@ -38,24 +38,6 @@ case " $ID $ID_LIKE " in
     ;;
 esac
 
-fedora_build_error() {
-  echo "$1" >&2
-  echo "Install Fedora build dependencies, then run ./bin/install again:" >&2
-  echo "  sudo dnf --refresh --setopt=install_weak_deps=False install gcc-c++ make pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel pulseaudio-libs-devel" >&2
-  exit 1
-}
-
-for tool in g++ make; do
-  command -v "$tool" >/dev/null 2>&1 || fedora_build_error "$tool is required to build monologue."
-done
-if ! . "$ROOT/bin/qt-env"; then
-  fedora_build_error "Qt build tools are required to build monologue."
-fi
-if ! "$PKG_CONFIG" --print-errors --exists 'Qt6Core >= 6.8' Qt6Gui Qt6Qml Qt6Quick Qt6QuickControls2 Qt6Multimedia Qt6DBus Qt6Concurrent libpulse; then
-  echo "Checked development files with $PKG_CONFIG." >&2
-  fedora_build_error "Qt 6.8 or newer (including Declarative and Multimedia) and libpulse development files are required."
-fi
-
 case "${HOME:-}" in
   /*) ;;
   *) echo "HOME must be an absolute path for a user-local install." >&2; exit 1 ;;
@@ -67,7 +49,12 @@ case "$DATA_HOME" in
   *) echo "XDG_DATA_HOME must be an absolute path." >&2; exit 1 ;;
 esac
 
-"$ROOT/bin/build"
+"$ROOT/bin/build" || {
+  status=$?
+  echo "Build failed. Install Fedora build dependencies, then run ./bin/install again:" >&2
+  echo "  sudo dnf --refresh --setopt=install_weak_deps=False install gcc-c++ make pkgconf-pkg-config qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel pulseaudio-libs-devel" >&2
+  exit "$status"
+}
 
 # Desktop entries have their own quoting rules, separate from shell quoting.
 # Escape both the string and Exec layers, and protect literal % field codes.

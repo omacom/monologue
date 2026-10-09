@@ -69,7 +69,7 @@ On Fedora, the script builds the application and installs its binary into `~/.lo
 
 The installer does not install dependencies, enable repositories, or create an RPM. Re-running it rebuilds and replaces the user-local installation. Fedora installation takes no arguments; Arch's `makepkg` options do not apply.
 
-The build and test scripts select `pkg-config` from Qt's host prefix when available. This avoids Homebrew's `pkg-config` shadowing Fedora's version and incorrectly reporting that installed Qt development packages are missing. You can explicitly select tools with the `QMAKE` and `PKG_CONFIG` environment variables, for example:
+The build and test scripts select `pkg-config` from Qt's host prefix when available. This avoids Homebrew's `pkg-config` shadowing Fedora's version and failing to find Fedora's libpulse development files. The selected qmake checks Qt's minimum version and required modules through the project configuration. You can explicitly select tools with the `QMAKE` and `PKG_CONFIG` environment variables, for example:
 
 ```sh
 PKG_CONFIG=/usr/bin/pkg-config ./bin/install

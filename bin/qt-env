@@ -1,4 +1,4 @@
-# Sourced by build/install/test scripts; explicit tool overrides are respected.
+# Sourced by build/test scripts; explicit tool overrides are respected.
 if [ -z "${QMAKE:-}" ]; then
   if ! QMAKE="$(command -v qmake6 || command -v qmake)"; then
     echo "qmake6 or qmake is required to build monologue." >&2
