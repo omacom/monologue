@@ -1,5 +1,4 @@
 #include "edit.h"
-#include <QJsonArray>
 #include <algorithm>
 
 edit::Clips edit::whole(double duration) { return {{0, std::max(0.0, duration)}}; }
@@ -39,18 +38,3 @@ bool edit::untouched(const Clips &clips, double duration) {
     return ranges.size() == 1 && ranges.first().start <= 0 && ranges.first().end >= duration;
 }
 
-QJsonObject edit::toJson(const Clips &clips) {
-    QJsonArray list;
-    for (const auto &clip : clips) list.append(QJsonArray{clip.start, clip.end});
-    return {{"clips", list}};
-}
-
-edit::Clips edit::fromJson(const QJsonObject &json, double duration) {
-    Clips clips;
-    for (const auto &entry : json["clips"].toArray()) {
-        const auto pair = entry.toArray();
-        if (pair.size() == 2) clips.append({pair[0].toDouble(), pair[1].toDouble()});
-    }
-    clips = normalized(clips, duration);
-    return clips.isEmpty() ? whole(duration) : clips;
-}

@@ -99,12 +99,12 @@ QString media::normalizeMp4(const QString &path, double fps) {
                             "-movflags", "+faststart", temporary});
     if(!process.waitForFinished(120000)) {
         process.kill(); process.waitForFinished();
-        return "Finalizing timed out. The original recording has been kept.";
+        return "Finalizing the recording timed out.";
     }
     if(process.exitStatus()!=QProcess::NormalExit || process.exitCode()!=0)
         return "Could not finalize the MP4: "+QString::fromUtf8(process.readAllStandardError()).left(500);
     if(std::rename(QFile::encodeName(temporary).constData(),QFile::encodeName(path).constData())!=0)
-        return "Could not replace the finalized clip. Both files have been kept.";
+        return "Could not replace the finalized clip.";
     return {};
 }
 media::Probe media::probe(const QString &path) {
@@ -125,7 +125,7 @@ media::Probe media::probe(const QString &path) {
     result.duration = doc["format"].toObject()["duration"].toString().toDouble();
     result.ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 &&
                 !result.size.isEmpty() && result.duration > 0;
-    if (!result.ok) result.error = "The recording could not be finalized as a playable H.264 MP4. Its files have been kept.";
+    if (!result.ok) result.error = "The recording could not be finalized as a playable H.264 MP4.";
     return result;
 }
 QStringList media::exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio) {

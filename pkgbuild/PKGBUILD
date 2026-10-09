@@ -1,6 +1,6 @@
 # Maintainer: David Heinemeier Hansson <david@hey.com>
 pkgname=monologue
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc='A simple, theme-synced webcam recorder for Omarchy'
 arch=('x86_64' 'aarch64')

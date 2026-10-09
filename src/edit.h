@@ -1,6 +1,5 @@
 #pragma once
 #include <QList>
-#include <QJsonObject>
 
 // What survives of a take: an ordered list of clips from the original
 // recording, which is never modified. Neighbouring clips may touch (a split
@@ -25,6 +24,4 @@ Clips normalized(Clips clips, double duration);
 QList<Range> kept(const Clips &clips);
 double keptDuration(const Clips &clips);
 bool untouched(const Clips &clips, double duration);
-QJsonObject toJson(const Clips &clips);
-Clips fromJson(const QJsonObject &json, double duration);
 }

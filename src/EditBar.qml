@@ -252,6 +252,15 @@ Item {
             consider(root.playheadSec)
             return best
         }
+        // A split catches only on pause marks: the double-click's first click already moved the playhead here.
+        function snapToPause(t) {
+            var best = t, bestDistance = 8
+            for (var i = 0; i < root.pauses.length; ++i) {
+                var d = Math.abs(root.xForTime(root.pauses[i]) - root.xForTime(t))
+                if (d < bestDistance) { best = root.pauses[i]; bestDistance = d }
+            }
+            return best
+        }
         function seek(t) { root.playheadSec = t; root.scrub(t) }
         function hover(x, y) {
             var hit = hitTest(x)
@@ -297,7 +306,7 @@ Item {
             if (onRemove(mouse.x, mouse.y)) return
             var hit = hitTest(mouse.x)
             if (hit.split >= 0) backend.joinClips(hit.split)
-            else if (hit.clip >= 0 && !hit.handle) backend.split(snap(root.timeForX(mouse.x)))
+            else if (hit.clip >= 0 && !hit.handle) backend.split(snapToPause(root.timeForX(mouse.x)))
             else if (hit.clip < 0) win.restoreGap(hit.gap)
             hover(mouse.x, mouse.y)
         }

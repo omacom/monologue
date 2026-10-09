@@ -5,15 +5,11 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QDateTime>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QSaveFile>
+#include <QTemporaryFile>
 #include <QUuid>
 #include <QProcess>
 #include <QFutureWatcher>
 #include <QtConcurrentRun>
-#include <QRegularExpression>
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
@@ -41,7 +37,7 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
         connect(&m_devices,&QMediaDevices::videoInputsChanged,this,&Backend::refreshDevices);
         connect(&m_devices,&QMediaDevices::audioInputsChanged,this,&Backend::refreshDevices);
     }
-    connect(m_picker,&FilePicker::exportSelected,this,[this](const QUrl &url,double,double,int) { saveTo(url); });
+    connect(m_picker,&FilePicker::selected,this,&Backend::saveTo);
     connect(m_picker,&FilePicker::closed,this,[this] { m_dialogOpen=false; emit changed(); });
     connect(m_picker,&FilePicker::failed,this,[this](const QString &error) { m_dialogOpen=false; m_message=error; emit changed(); });
     m_tick.setInterval(40);
@@ -51,11 +47,11 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_finishTimeout.setInterval(2000);
     connect(&m_finishTimeout, &QTimer::timeout, this, [this] {
         if (!m_writer || m_finishAt < 0) return;
-        if (m_interruption.isEmpty()) m_interruption = "The final capture buffers did not arrive. The interrupted take has been kept.";
+        if (m_interruption.isEmpty()) m_interruption = "The final capture buffers did not arrive, so the take ends a moment early.";
         m_finishAt = -1;
         m_writer->finish();
     });
-    QTimer::singleShot(0,this,[this] { if(m_activateHardware) refreshDevices(); refreshRecordings(); });
+    QTimer::singleShot(0,this,[this] { recoverTake(); if(m_activateHardware) refreshDevices(); });
 }
 Backend::~Backend() {
     releaseSources();
@@ -68,7 +64,6 @@ int Backend::resolutionIndex() const {
 }
 int Backend::microphoneIndex() const { return indexOf(m_microphones,m_audioId); }
 bool Backend::ready() const { return m_state=="ready" && m_cameraHealthy && (!audioEnabled() || m_audioHealthy); }
-QString Backend::clipName() const { return m_clipFileName; }
 QString Backend::meterText() const {
     if (!audioEnabled()) return "Audio off";
     if (!m_audioHealthy) return "Unavailable";
@@ -81,9 +76,20 @@ void Backend::setPreview(QObject *sink) {
     if (m_preview && m_lastFrame.isValid()) m_preview->setVideoFrame(m_lastFrame);
 }
 void Backend::refreshDevices() {
-    const auto cameras=QMediaDevices::videoInputs();
+    // Infrared sensors (for face login) appear as greyscale-only cameras; they can't record a usable take.
+    QList<QCameraDevice> cameras;
+    for(const auto &d:QMediaDevices::videoInputs()) {
+        const auto formats=d.videoFormats();
+        if(std::all_of(formats.begin(),formats.end(),[](const auto &f) {
+            return f.pixelFormat()==QVideoFrameFormat::Format_Y8 || f.pixelFormat()==QVideoFrameFormat::Format_Y16;
+        })) continue;
+        cameras.append(d);
+    }
     const auto microphones=QMediaDevices::audioInputs();
-    if (m_cameraId.isEmpty() && !cameras.isEmpty()) m_cameraId=deviceId(QMediaDevices::defaultVideoInput().id());
+    if (m_cameraId.isEmpty() && !cameras.isEmpty()) {
+        const auto preferred=QMediaDevices::defaultVideoInput();
+        m_cameraId=deviceId((cameras.contains(preferred) ? preferred : cameras.first()).id());
+    }
     if (m_audioId.isEmpty() && !microphones.isEmpty()) m_audioId=deviceId(QMediaDevices::defaultAudioInput().id());
     auto label=[](const auto &device,const auto &all) {
         int count=0;
@@ -100,7 +106,7 @@ void Backend::refreshDevices() {
     if(audioMissing) m_microphones.prepend(QVariantMap{{"id",m_audioId},{"label",m_settings.value("microphone/label","Microphone").toString()+" — unavailable"}});
     emit devicesChanged();
     if(m_writer) {
-        if(cameraMissing || audioMissing) sourceFailed("A selected source was disconnected. The interrupted take has been kept.");
+        if(cameraMissing || audioMissing) sourceFailed("A selected source was disconnected, so the take was stopped.");
     } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
         // Do not reopen healthy devices when an unrelated input is plugged in.
         if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
@@ -267,11 +273,10 @@ void Backend::startTake() {
     if(!ready() || !m_lastFrame.isValid()) return;
     m_takeId=QUuid::createUuid().toString(QUuid::WithoutBraces);
     const QString directory=m_root+"/"+m_takeId;
-    if(!QDir().mkpath(directory)) { m_message="Could not create the recording folder. Check available space and permissions."; emit changed(); return; }
+    if(!QDir().mkpath(directory) || !lockTake(directory)) { m_message="Could not create the recording folder. Check available space and permissions."; emit changed(); return; }
     m_clipFileName="Monologue-"+QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss")+".mp4";
     m_clipPath=directory+"/"+m_clipFileName;
     m_interruption.clear(); m_duration=0;
-    writeManifest("in-progress");
     readAudio();
     m_writer=new Writer(this);
     connect(m_writer,&Writer::finished,this,&Backend::writerFinished,Qt::QueuedConnection);
@@ -305,19 +310,10 @@ void Backend::writerFinished() {
     m_finishTimeout.stop(); m_finishAt=-1;
     m_pauses.clear();
     for(const auto join:m_writer->joins()) m_pauses.append(join/1000000.0);
-    m_storedEdit={};
     m_writer->deleteLater(); m_writer=nullptr;
     releaseSources(true);
-    if(m_discardAfter) {
-        QDir(m_root+"/"+m_takeId).removeRecursively(); emit safeToClose(); return;
-    }
-    if(m_restartAfter) {
-        m_restartAfter=false;
-        if(QDir(m_root+"/"+m_takeId).removeRecursively()) {
-            newRecording(); refreshRecordings(); return;
-        }
-        m_interruption="Could not discard the recording. The clip has been kept.";
-    }
+    if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
+    if(m_restartAfter) { m_restartAfter=false; deleteTake(); activateSources(); return; }
     probeClip(m_clipPath,true);
 }
 void Backend::probeClip(const QString &path,bool currentTake) {
@@ -326,21 +322,21 @@ void Backend::probeClip(const QString &path,bool currentTake) {
     auto *watcher=new QFutureWatcher<media::Probe>(this);
     connect(watcher,&QFutureWatcher<media::Probe>::finished,this,[this,watcher,path,currentTake] {
         const auto result=watcher->result(); watcher->deleteLater(); m_probing=false;
+        if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
         const bool correct=currentTake ? result.size==m_cameraFormat.resolution() && result.audio==audioEnabled() : true;
         if(result.ok && correct) {
             m_clipPath=path; m_clipFileName=QFileInfo(path).fileName(); m_duration=result.duration;
-            m_formatLabel=QString("%1 × %2 · %3").arg(result.size.width()).arg(result.size.height()).arg(result.audio?"Audio":"No audio");
             m_state="finished"; m_message=m_interruption; m_clipAudio=result.audio;
-            resetEdit(edit::fromJson(m_storedEdit,result.duration),m_pauses);
-            writeManifest(m_interruption.isEmpty()?"complete":"interrupted");
+            resetEdit(edit::whole(result.duration),m_pauses);
             m_thumbnails.load(path,result.duration);
         } else {
+            // Nothing here can be edited; don't leave it to be "recovered" again next launch.
+            deleteTake();
             m_state="unavailable";
-            m_message=result.ok ? "The encoded clip did not match the selected resolution or audio mode. Its files have been kept in Recordings." : result.error;
-            if(currentTake) writeManifest("incomplete");
-            m_clipPath.clear();
+            m_message=!currentTake ? "Your last take was interrupted and could not be recovered."
+                    : result.ok ? "The encoded clip did not match the selected resolution or audio mode." : result.error;
         }
-        refreshRecordings(); emit changed();
+        emit changed();
     });
     const auto fps=m_fps;
     watcher->setFuture(QtConcurrent::run([path,currentTake,fps] {
@@ -362,7 +358,7 @@ void Backend::save() {
     if(m_state!="finished" || m_dialogOpen) return;
     const QString directory=m_settings.value("saveDirectory",QStandardPaths::writableLocation(QStandardPaths::MoviesLocation)).toString();
     m_dialogOpen=true; emit changed();
-    m_picker->exportVideo(QUrl::fromLocalFile(directory+"/"+m_clipFileName),0,m_duration,{});
+    m_picker->saveVideo(QUrl::fromLocalFile(directory+"/"+m_clipFileName));
 }
 void Backend::saveTo(const QUrl &url) {
     if(m_state!="finished") return;
@@ -387,6 +383,12 @@ void Backend::confirmOverwrite(bool confirmed) {
 }
 void Backend::writeTo(const QString &destination) {
     if(m_state!="finished") return;
+    // Takes are deleted when you leave them, so a save must never land among them.
+    const auto folder=QFileInfo(QFileInfo(destination).absolutePath()).canonicalFilePath();
+    const auto takes=QFileInfo(m_root).canonicalFilePath();
+    if(!takes.isEmpty() && (folder==takes || folder.startsWith(takes+"/"))) {
+        m_message="Could not save: choose a folder outside Monologue's working files."; emit changed(); return;
+    }
     if(edit::untouched(m_edit,m_duration)) copyTo(destination);
     else exportTo(destination);
 }
@@ -403,12 +405,13 @@ void Backend::copyTo(const QString &destination) {
 }
 void Backend::exportTo(const QString &destination) {
     if(m_state!="finished" || m_export) return;
+    // Encode into a freshly reserved file beside the destination, then rename it into place.
     const QFileInfo target(destination);
-    if(target.exists() && target.canonicalFilePath()==QFileInfo(m_clipPath).canonicalFilePath()) {
-        m_message="Could not save: Choose a destination outside the retained recording itself."; emit changed(); return;
-    }
-    // Encode beside the destination, then rename over it once complete.
-    m_exportPartial=target.absolutePath()+"/."+target.completeBaseName()+".monologue-partial.mp4";
+    QTemporaryFile partial(target.absolutePath()+"/."+target.completeBaseName()+"-XXXXXX.mp4");
+    partial.setAutoRemove(false);
+    if(!partial.open()) { m_message="Could not save: "+partial.errorString(); emit changed(); return; }
+    m_exportPartial=partial.fileName();
+    partial.close();
     const double total=keptDuration();
     m_state="saving"; m_message="Saving your clip…"; m_saveProgress=0; emit changed();
     m_export=new QProcess(this);
@@ -456,8 +459,7 @@ bool Backend::unsaved() const {
 void Backend::closeTake() {
     // Leaving the editor: the take has served its purpose, whether or not it was saved.
     if(m_writer || m_probing || m_state=="saving" || m_takeId.isEmpty()) return;
-    if(auto directory=recordingDirectory(m_takeId); !directory.isEmpty()) QDir(directory).removeRecursively();
-    m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear();
+    deleteTake();
     if(m_state=="finished") m_state="closed";
     resetEdit({},{}); m_thumbnails.clear();
     emit changed();
@@ -484,7 +486,6 @@ void Backend::applyEdit(edit::Clips next) {
     if(next==m_edit || next.isEmpty()) return;
     if(!m_gesture || !m_gestureRecorded) { m_undo.append(m_edit); m_redo.clear(); m_gestureRecorded=m_gesture; }
     m_edit=next;
-    if(!m_gesture) writeManifest(m_status);
     emit editChanged();
 }
 void Backend::split(double time) {
@@ -518,81 +519,59 @@ void Backend::beginGesture() { if(m_state=="finished") { m_gesture=true; m_gestu
 void Backend::endGesture() {
     if(!m_gesture) return;
     m_gesture=false;
+    // Normalizing can drop a clip too short to keep; never let that empty the take.
     const auto next=edit::normalized(m_edit,m_duration);
-    if(next!=m_edit) { m_edit=next; emit editChanged(); }
-    writeManifest(m_status);
+    if(!next.isEmpty() && next!=m_edit) { m_edit=next; emit editChanged(); }
 }
 void Backend::undo() {
     if(m_state!="finished" || m_gesture || m_undo.isEmpty()) return;
-    m_redo.append(m_edit); m_edit=m_undo.takeLast(); writeManifest(m_status); emit editChanged();
+    m_redo.append(m_edit); m_edit=m_undo.takeLast(); emit editChanged();
 }
 void Backend::redo() {
     if(m_state!="finished" || m_gesture || m_redo.isEmpty()) return;
-    m_undo.append(m_edit); m_edit=m_redo.takeLast(); writeManifest(m_status); emit editChanged();
+    m_undo.append(m_edit); m_edit=m_redo.takeLast(); emit editChanged();
 }
-void Backend::writeManifest(const QString &status) {
-    m_status=status;
-    QSaveFile file(m_root+"/"+m_takeId+"/take.json");
-    if(!file.open(QIODevice::WriteOnly)) return;
-    QJsonArray pauses;
-    for(const auto pause:m_pauses) pauses.append(pause);
-    QJsonObject manifest{{"filename",m_clipFileName},{"status",status},{"duration",m_duration},{"message",m_interruption},{"pauses",pauses}};
-    if(m_state=="finished" || m_state=="saving") manifest["edit"]=edit::toJson(m_edit);
-    file.write(QJsonDocument(manifest).toJson());
-    file.commit();
+bool Backend::lockTake(const QString &directory) {
+    auto lock=std::make_unique<QLockFile>(directory+"/.lock");
+    // Only a dead owner makes a lock stale; a take can be recorded and edited for hours.
+    lock->setStaleLockTime(0);
+    if(!lock->tryLock(0)) return false;
+    m_takeLock=std::move(lock);
+    return true;
 }
-QString Backend::recordingDirectory(const QString &id) const {
-    static const QRegularExpression uuid("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$");
-    if(!uuid.match(id).hasMatch()) return {};
-    const QFileInfo directory(m_root+"/"+id);
-    if(directory.isSymLink() || !directory.isDir()) return {};
-    return directory.absoluteFilePath();
+void Backend::deleteTake() {
+    if(!m_takeId.isEmpty()) {
+        m_takeLock.reset();
+        QDir(m_root+"/"+m_takeId).removeRecursively();
+    }
+    m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear();
+    resetEdit({},{}); m_thumbnails.clear();
 }
-void Backend::refreshRecordings() {
-    m_recordings.clear();
+void Backend::recoverTake() {
     const auto entries=QDir(m_root).entryInfoList(QDir::Dirs|QDir::NoDotAndDotDot,QDir::Time);
     for(const auto &entry:entries) {
-        if(recordingDirectory(entry.fileName()).isEmpty()) continue;
-        QFile manifest(entry.filePath()+"/take.json");
-        if(!manifest.open(QIODevice::ReadOnly)) continue;
-        const auto info=QJsonDocument::fromJson(manifest.readAll()).object();
-        const QString name=info["filename"].toString();
-        if(name.isEmpty() || QFileInfo(name).fileName()!=name) continue;
-        const QFileInfo clip(entry.filePath()+"/"+name);
-        m_recordings.append(QVariantMap{{"id",entry.fileName()},{"name",name},{"status",info["status"].toString()},{"size",QString::number(clip.size()/1048576.0,'f',1)+" MB"},{"path",clip.absoluteFilePath()}});
-    }
-    emit recordingsChanged();
-}
-void Backend::openRecording(const QString &id) {
-    if(m_writer || m_probing || m_state=="saving" || m_dialogOpen) return;
-    for(const auto &entry:m_recordings) {
-        const auto item=entry.toMap();
-        if(item["id"]==id && !recordingDirectory(id).isEmpty()) {
-            releaseSources(); m_takeId=id; m_interruption.clear(); m_storedEdit={}; m_pauses.clear();
-            QFile manifest(recordingDirectory(id)+"/take.json");
-            if(manifest.open(QIODevice::ReadOnly)) {
-                const auto info=QJsonDocument::fromJson(manifest.readAll()).object();
-                m_interruption=info["message"].toString();
-                m_storedEdit=info["edit"].toObject();
-                m_pauses.clear();
-                for(const auto &pause:info["pauses"].toArray()) m_pauses.append(pause.toDouble());
-                if(info["status"]!="complete" && m_interruption.isEmpty()) m_interruption="Recovered after an interrupted recording.";
-            }
-            probeClip(item["path"].toString(),false); return;
-        }
+        if(!lockTake(entry.filePath())) continue; // Another Monologue is using it.
+        QString clip;
+        for(const auto &name:QDir(entry.filePath()).entryList({"*.mp4"},QDir::Files))
+            if(!name.endsWith(".finalizing.mp4")) clip=name;
+        m_takeId=entry.fileName();
+        // Only a recent take is worth reopening; anything older is just left over.
+        const QFileInfo file(entry.filePath()+"/"+clip);
+        if(clip.isEmpty() || file.lastModified().secsTo(QDateTime::currentDateTime())>=3600) { deleteTake(); continue; }
+        m_interruption="Recovered the take from your last session.";
+        m_pauses.clear();
+        probeClip(entry.filePath()+"/"+clip,false);
+        return;
     }
 }
-void Backend::discardRecording(const QString &id) {
-    if(m_writer || m_probing || m_state=="saving" || m_dialogOpen) return;
-    const auto directory=recordingDirectory(id);
-    if(directory.isEmpty()) return;
-    if(!QDir(directory).removeRecursively()) { m_message="Could not discard the recording."; emit changed(); return; }
-    if(id==m_takeId) newRecording();
-    refreshRecordings();
+void Backend::discardAndClose() {
+    // The take may already have stopped on its own while the quit dialog was open.
+    if(m_writer) { m_discardAfter=true; finish(); return; }
+    if(m_probing) { m_discardAfter=true; return; }
+    closeTake(); emit safeToClose();
 }
-void Backend::discardAndClose() { m_discardAfter=true; finish(); }
 void Backend::discardCurrent() {
     if(m_dialogOpen || m_probing || m_state=="saving" || m_state=="finalizing") return;
     if(m_writer) { m_restartAfter=true; finish(); }
-    else if(m_state=="finished") discardRecording(m_takeId);
+    else if(m_state=="finished") newRecording();
 }
