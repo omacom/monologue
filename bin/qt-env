@@ -1,10 +1,6 @@
 # Sourced by build/install/test scripts; explicit tool overrides are respected.
 if [ -z "${QMAKE:-}" ]; then
-  if command -v qmake6 >/dev/null 2>&1; then
-    QMAKE="$(command -v qmake6)"
-  elif command -v qmake >/dev/null 2>&1; then
-    QMAKE="$(command -v qmake)"
-  else
+  if ! QMAKE="$(command -v qmake6 || command -v qmake)"; then
     echo "qmake6 or qmake is required to build monologue." >&2
     return 1
   fi

@@ -34,7 +34,7 @@ class InstallTests(unittest.TestCase):
         for filename in ("PKGBUILD", "monologue.desktop", "monologue.svg"):
             shutil.copy2(str(ROOT / "pkgbuild" / filename), str(self.project / "pkgbuild" / filename))
         shutil.copy2(str(ROOT / "LICENSE"), str(self.project / "LICENSE"))
-        for tool in ("sh", "dirname", "mkdir", "chmod", "install", "sed", "mktemp", "rm"):
+        for tool in ("sh", "dirname", "mkdir", "chmod", "install", "sed", "awk", "mktemp", "rm"):
             executable = shutil.which(tool)
             self.assertIsNotNone(executable, "Required test tool: " + tool)
             (self.tools / tool).symlink_to(executable)
@@ -130,7 +130,6 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         desktop = self.assert_installation(self.home / ".local/share")
         self.assertIn('Exec="{}"\n'.format(self.home / ".local/bin/monologue"), desktop.read_text())
-        self.assertIn("Add " + str(self.home / ".local/bin") + " to PATH", result.stdout)
 
     def test_custom_xdg_data_home(self):
         data_home = self.directory / "custom data"
@@ -144,14 +143,6 @@ class InstallTests(unittest.TestCase):
         self.environment["XDG_DATA_HOME"] = ""
         result = self.run_install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_installation(self.home / ".local/share")
-
-    def test_binary_already_on_path(self):
-        self.environment["PATH"] += ":" + str(self.home / ".local/bin")
-        result = self.run_install()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("Add ", result.stdout)
-        self.assertIn("Or run monologue from a terminal", result.stdout)
         self.assert_installation(self.home / ".local/share")
 
     def test_launcher_escapes_special_characters(self):

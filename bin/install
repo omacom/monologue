@@ -77,21 +77,11 @@ desktop_exec="$(printf '%s' "$BIN_DIR/monologue" | sed \
 desktop_file="$(mktemp "$ROOT/build/monologue.desktop.XXXXXX")"
 trap 'rm -f "$desktop_file"' 0
 trap 'exit 1' 1 2 15
-while IFS= read -r line; do
-  case "$line" in
-    Exec=*) printf 'Exec="%s"\n' "$desktop_exec" ;;
-    *) printf '%s\n' "$line" ;;
-  esac
-done < "$ROOT/pkgbuild/monologue.desktop" > "$desktop_file"
+DESKTOP_EXEC="$desktop_exec" awk '/^Exec=/{ $0="Exec=\"" ENVIRON["DESKTOP_EXEC"] "\"" } {print}' "$ROOT/pkgbuild/monologue.desktop" > "$desktop_file"
 
 install -Dm755 "$ROOT/build/monologue" "$BIN_DIR/monologue"
 install -Dm644 "$desktop_file" "$DATA_HOME/applications/monologue.desktop"
 install -Dm644 "$ROOT/pkgbuild/monologue.svg" "$DATA_HOME/icons/hicolor/scalable/apps/monologue.svg"
 install -Dm644 "$ROOT/LICENSE" "$DATA_HOME/licenses/monologue/LICENSE"
 
-echo "Installed $BIN_DIR/monologue"
-echo "Launch Monologue from your desktop's application menu."
-case ":${PATH:-}:" in
-  *":$BIN_DIR:"*) echo "Or run monologue from a terminal." ;;
-  *) echo "Add $BIN_DIR to PATH to run monologue from a terminal." ;;
-esac
+echo "Installed $BIN_DIR/monologue; launch it from your application menu."
