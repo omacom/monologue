@@ -21,11 +21,71 @@ Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia
 
 The save dialog requires `xdg-desktop-portal` and your desktop's portal backend. Monologue uses Qt's FFmpeg multimedia backend for timestamped capture; the binary selects it automatically.
 
-To build and install the Arch package:
+### Arch / Omarchy
+
+To build and install the Arch package (requires `makepkg`; extra arguments are passed to it):
 
 ```sh
 ./bin/install
 ```
+
+### Fedora
+
+Monologue also runs on Fedora; Arch, Omarchy, and Hyprland are not runtime requirements. Without Omarchy or Hyprland, it uses the default accent and corner rounding. Qt 6.8 or newer is required.
+
+Install the build dependencies. These commands refresh repository metadata and disable optional (weak) dependencies for this transaction only; required dependencies are still installed. This avoids pulling in unrelated integrations for software you already have, such as Ghostty's Vim plugin.
+
+```sh
+sudo dnf --refresh --setopt=install_weak_deps=False install \
+  gcc-c++ make pkgconf-pkg-config \
+  qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtmultimedia-devel \
+  pulseaudio-libs-devel
+```
+
+For a GNOME Wayland desktop, the runtime integration packages are:
+
+```sh
+sudo dnf --refresh --setopt=install_weak_deps=False install \
+  qt6-qtwayland pipewire-pulseaudio \
+  xdg-desktop-portal xdg-desktop-portal-gnome
+```
+
+Use your desktop's portal backend instead of `xdg-desktop-portal-gnome` on other desktops (for example, `xdg-desktop-portal-kde` on KDE).
+
+You also need `ffmpeg` and `ffprobe` with H.264/AAC encoding support. Edited exports explicitly use `libx264`, so Fedora's restricted `ffmpeg-free` alone is not sufficient. If needed, follow [RPM Fusion's multimedia instructions](https://rpmfusion.org/Howto/Multimedia) to install full codec support. Qt's FFmpeg backend must also have H.264/AAC encoders available for recording. Check the command-line encoders with:
+
+```sh
+ffmpeg -hide_banner -encoders | grep -E 'libx264|aac'
+```
+
+Then run the installer **as your normal user, without sudo**:
+
+```sh
+./bin/install
+~/.local/bin/monologue
+```
+
+On Fedora, the script builds the application and installs its binary into `~/.local/bin`, plus a desktop launcher, icon, and license into `${XDG_DATA_HOME:-$HOME/.local/share}`. The launcher uses an absolute executable path, so it does not rely on the desktop session's `PATH`. Add `~/.local/bin` to your shell's `PATH` if you want to launch it simply as `monologue`.
+
+The installer does not install dependencies, enable repositories, or create an RPM. Re-running it rebuilds and replaces the user-local installation. Fedora installation takes no arguments; Arch's `makepkg` options do not apply.
+
+The build and test scripts select `pkg-config` from Qt's host prefix when available. This avoids Homebrew's `pkg-config` shadowing Fedora's version and failing to find Fedora's libpulse development files. The selected qmake checks Qt's minimum version and required modules through the project configuration. You can explicitly select tools with the `QMAKE` and `PKG_CONFIG` environment variables, for example:
+
+```sh
+PKG_CONFIG=/usr/bin/pkg-config ./bin/install
+```
+
+### Uninstall
+
+Run the uninstaller as your normal user:
+
+```sh
+./bin/uninstall
+```
+
+On Arch / Omarchy, it removes only the `monologue` package through `sudo pacman -R`, leaving dependencies installed. On Fedora, run it **without sudo**: it removes the user-local binary, desktop launcher, icon, and license. If you installed with a custom `XDG_DATA_HOME`, use the same value when uninstalling. Missing files are harmless, so the Fedora uninstaller can be run repeatedly.
+
+The script takes no arguments and preserves settings, recordings, saved videos, build output, and unrelated files. Fedora cleanup leaves directories in place.
 
 ## Shortcuts
 
@@ -71,9 +131,19 @@ A disconnected source or encoder error stops the take and preserves its files. A
 
 ## Development and validation
 
+The test runner requires Python 3 in addition to the build dependencies.
+
 ```sh
 ./bin/test
 ```
+
+Installer and uninstaller regression tests can also run independently, with only Python 3 and standard shell tools:
+
+```sh
+python3 tests/install_tests.py
+```
+
+They use temporary homes, mocked build tools, and fixture distribution metadata; they do not build the application, install packages, or change your real home directory.
 
 Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
 

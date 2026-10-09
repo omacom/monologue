@@ -1,0 +1,67 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -ne 0 ]; then
+  echo "Usage: ./bin/uninstall (no arguments)" >&2
+  exit 1
+fi
+
+# Use the same distribution override as bin/install for sandboxed tests.
+OS_RELEASE="${MONOLOGUE_OS_RELEASE:-/etc/os-release}"
+if [ -z "${MONOLOGUE_OS_RELEASE:-}" ] && [ ! -r "$OS_RELEASE" ]; then
+  OS_RELEASE=/usr/lib/os-release
+fi
+if [ ! -r "$OS_RELEASE" ]; then
+  echo "Cannot detect the distribution; refusing to uninstall." >&2
+  exit 1
+fi
+ID=
+ID_LIKE=
+. "$OS_RELEASE"
+
+case " $ID $ID_LIKE " in
+  *" arch "*)
+    if ! command -v pacman >/dev/null 2>&1; then
+      echo "pacman is required to remove the Arch package." >&2
+      exit 1
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+      exec pacman -R -- monologue
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "Run sudo pacman -R -- monologue to remove the Arch package." >&2
+      exit 1
+    fi
+    exec sudo pacman -R -- monologue
+    ;;
+  *" fedora "*)
+    if [ "$(id -u)" -eq 0 ]; then
+      echo "Run ./bin/uninstall as your normal user, without sudo, to remove the user-local installation." >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Unsupported distribution: ${ID:-unknown}; refusing to uninstall." >&2
+    exit 1
+    ;;
+esac
+
+case "${HOME:-}" in
+  /*) ;;
+  *) echo "HOME must be an absolute path for a user-local uninstall." >&2; exit 1 ;;
+esac
+BIN_DIR="$HOME/.local/bin"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+case "$DATA_HOME" in
+  /*) ;;
+  *) echo "XDG_DATA_HOME must be an absolute path." >&2; exit 1 ;;
+esac
+
+# Remove only installed files, never directories, settings, or recordings.
+rm -f -- \
+  "$BIN_DIR/monologue" \
+  "$DATA_HOME/applications/monologue.desktop" \
+  "$DATA_HOME/icons/hicolor/scalable/apps/monologue.svg" \
+  "$DATA_HOME/licenses/monologue/LICENSE"
+
+echo "Removed the user-local Monologue installation. Settings and recordings were kept."
