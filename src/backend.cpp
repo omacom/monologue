@@ -1,5 +1,7 @@
 #include "backend.h"
 #include "mediautils.h"
+#include "windowcapture.h"
+#include "windowlist.h"
 #include <QAudioDevice>
 #include <QDir>
 #include <QFileInfo>
@@ -15,6 +17,9 @@
 #include <algorithm>
 
 static QString deviceId(const QByteArray &id) { return QString::fromLatin1(id.toBase64()); }
+static QString formatText(const QSize &size, double fps, bool upTo) {
+    return QString("%1 × %2 · %3%4 fps").arg(size.width()).arg(size.height()).arg(upTo ? "up to " : "").arg(fps, 0, 'f', fps == int(fps) ? 0 : 2);
+}
 static int indexOf(const QVariantList &list, const QString &id) {
     for (int i=0; i<list.size(); ++i) if (list[i].toMap()["id"].toString()==id) return i;
     return -1;
@@ -29,6 +34,8 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_audioId=m_settings.value("microphone/id").toString();
     m_capture.setVideoSink(&m_sink);
     connect(&m_sink,&QVideoSink::videoFrameChanged,this,&Backend::receiveVideo);
+    m_windowList = new WindowList(this);
+    connect(m_windowList, &WindowList::updated, this, &Backend::refreshDevices);
     if(m_activateHardware) {
         connect(&m_devices,&QMediaDevices::videoInputsChanged,this,&Backend::refreshDevices);
         connect(&m_devices,&QMediaDevices::audioInputsChanged,this,&Backend::refreshDevices);
@@ -47,7 +54,12 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
         m_finishAt = -1;
         m_writer->finish();
     });
-    QTimer::singleShot(0,this,[this] { recoverTake(); if(m_activateHardware) refreshDevices(); });
+    QTimer::singleShot(0,this,[this] {
+        recoverTake();
+        if(!m_activateHardware) return;
+        m_windowList->start();
+        refreshDevices();
+    });
 }
 Backend::~Backend() {
     releaseSources();
@@ -88,17 +100,30 @@ void Backend::refreshDevices() {
         for(const auto &other:all) if(other.description()==device.description()) ++count;
         return count>1 ? device.description()+" · "+QString::fromUtf8(device.id()) : device.description();
     };
-    m_cameras.clear(); m_microphones.clear();
-    for(const auto &d:cameras) m_cameras.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,cameras)}});
-    for(const auto &d:microphones) m_microphones.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,microphones)}});
-    m_microphones.append(QVariantMap{{"id","none"},{"label","No audio"}});
-    const bool cameraMissing=indexOf(m_cameras,m_cameraId)<0;
-    const bool audioMissing=indexOf(m_microphones,m_audioId)<0;
-    if(cameraMissing) m_cameras.prepend(QVariantMap{{"id",m_cameraId},{"label",m_settings.value("camera/label","Camera").toString()+" — unavailable"}});
-    if(audioMissing) m_microphones.prepend(QVariantMap{{"id",m_audioId},{"label",m_settings.value("microphone/label","Microphone").toString()+" — unavailable"}});
-    emit devicesChanged();
+    QVariantList nextCameras, nextMicrophones;
+    for(const auto &d:cameras) nextCameras.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,cameras)},{"kind","camera"}});
+    for(const auto &w:m_windowList->windows())
+        nextCameras.append(QVariantMap{{"id",w.id},{"label",w.label},{"kind","window"},{"title",w.title},{"windowClass",w.windowClass},{"workspace",w.workspace},{"available",true}});
+    for(const auto &d:microphones) nextMicrophones.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,microphones)}});
+    nextMicrophones.append(QVariantMap{{"id","none"},{"label","No audio"}});
+    // The first client list has not arrived yet. Keep the remembered window
+    // visible, and do not report it missing or fall back to a camera.
+    const bool windowPending=window::isWindow(m_cameraId) && !m_windowList->settled();
+    if(windowPending) nextCameras.prepend(QVariantMap{{"id",m_cameraId},{"label",m_settings.value("camera/label","Window").toString()},{"kind","window"},{"available",false}});
+    const bool cameraMissing=indexOf(nextCameras,m_cameraId)<0;
+    const bool audioMissing=indexOf(nextMicrophones,m_audioId)<0;
+    if(cameraMissing) {
+        const bool window=window::isWindow(m_cameraId);
+        nextCameras.prepend(QVariantMap{{"id",m_cameraId},{"label",m_settings.value("camera/label",window?"Window":"Camera").toString()+" — unavailable"},{"kind",window?"window":"camera"},{"available",false}});
+    }
+    if(audioMissing) nextMicrophones.prepend(QVariantMap{{"id",m_audioId},{"label",m_settings.value("microphone/label","Microphone").toString()+" — unavailable"}});
+    const bool same=nextCameras==m_cameras && nextMicrophones==m_microphones;
+    m_cameras=nextCameras; m_microphones=nextMicrophones;
+    if(!same) emit devicesChanged();
+    if(windowPending) return;
     if(m_writer) {
-        if(cameraMissing || audioMissing) sourceFailed("A selected source was disconnected, so the take was stopped.");
+        if(cameraMissing && window::isWindow(m_cameraId)) sourceFailed("The window closed, so the take was stopped.");
+        else if(cameraMissing || audioMissing) sourceFailed("A selected source was disconnected, so the take was stopped.");
     } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
         // Do not reopen healthy devices when an unrelated input is plugged in.
         if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
@@ -106,6 +131,7 @@ void Backend::refreshDevices() {
 }
 void Backend::releaseSources(bool keepPicture) {
     if(m_camera) { m_camera->disconnect(this); m_camera->stop(); m_capture.setCamera(nullptr); delete m_camera; m_camera=nullptr; }
+    if(m_window) { m_window->disconnect(this); m_window->stop(); delete m_window; m_window=nullptr; }
     if(m_audio) { m_audio->disconnect(this); m_audio->stop(); delete m_audio; m_audio=nullptr; }
     m_cameraHealthy=false; m_audioHealthy=false;
     m_videoOrigin=-1; m_audioCapturedUntil=-1; m_videoCapturedUntil=-1;
@@ -117,18 +143,36 @@ void Backend::activateSources() {
     if(m_writer || m_state=="saving" || m_probing) return;
     if(!m_activateHardware) { m_state="unavailable"; emit changed(); return; }
     releaseSources();
-    m_state="starting"; m_message.clear(); m_formatLabel.clear(); m_activatedAt=now();
+    m_state="starting"; m_message.clear(); m_formatLabel.clear(); m_videoSize=QSize(); m_activatedAt=now();
     QCameraDevice selectedCamera;
-    for(const auto &d:QMediaDevices::videoInputs()) if(deviceId(d.id())==m_cameraId) selectedCamera=d;
+    window::Info selectedWindow;
+    bool haveWindow=false;
+    if(window::isWindow(m_cameraId)) {
+        for(const auto &candidate:m_windowList->windows()) if(candidate.id==m_cameraId) { selectedWindow=candidate; haveWindow=true; break; }
+    } else for(const auto &d:QMediaDevices::videoInputs()) if(deviceId(d.id())==m_cameraId) selectedCamera=d;
     QAudioDevice selectedAudio;
     for(const auto &d:QMediaDevices::audioInputs()) if(deviceId(d.id())==m_audioId) selectedAudio=d;
-    if(selectedCamera.isNull()) { m_state="unavailable"; m_message="Connect a camera or choose an available video source."; }
+    if(window::isWindow(m_cameraId)) {
+        if(!haveWindow) { m_state="unavailable"; m_message="Choose an available video source."; }
+        else {
+            m_fps=30;
+            m_formatLabel="Window · up to 30 fps";
+            m_window=new WindowCapture(this);
+            connect(m_window,&WindowCapture::frameReady,this,&Backend::receiveVideo);
+            connect(m_window,&WindowCapture::failed,this,[this](const QString &error) {
+                // The capture reports a closed window the same way during preview and a take.
+                sourceFailed(!m_writer && error=="The window closed, so the take was stopped." ? "The window stopped delivering frames." : error);
+            });
+            m_window->start(selectedWindow.handle);
+        }
+    } else if(selectedCamera.isNull()) { m_state="unavailable"; m_message="Connect a camera or choose an available video source."; }
     else {
         m_cameraFormat=media::bestCameraFormat(selectedCamera);
         if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message="This camera advertises no supported video formats."; }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
-            m_formatLabel=QString("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
+            m_videoSize=m_cameraFormat.resolution();
+            m_formatLabel=formatText(m_videoSize,m_fps,true);
             m_camera=new QCamera(selectedCamera,this);
             m_camera->setCameraFormat(m_cameraFormat);
             m_capture.setCamera(m_camera);
@@ -157,10 +201,18 @@ void Backend::updateReady() {
     }
 }
 void Backend::receiveVideo(const QVideoFrame &frame) {
-    if(!m_camera || !frame.isValid()) return;
+    if((!m_camera && !m_window) || !frame.isValid() || !frame.size().isValid()) return;
     m_lastVideoAt=now();
-    if(frame.size()!=m_cameraFormat.resolution()) {
-        sourceFailed("The camera did not provide its maximum resolution. Choose another source or Retry."); return;
+    if(!m_videoSize.isValid()) {
+        m_videoSize=frame.size();
+        if(m_window) m_formatLabel=formatText(m_videoSize,m_fps,false);
+    } else if(frame.size()!=m_videoSize) {
+        if(m_window && !m_writer) {
+            m_videoSize=frame.size();
+            m_formatLabel=formatText(m_videoSize,m_fps,false);
+            emit changed();
+        } else if(m_window) { sourceFailed("The window changed size, so the take was stopped."); return; }
+        else { sourceFailed("The camera did not provide its maximum resolution. Choose another source or Retry."); return; }
     }
     m_lastFrame=frame;
     // Once stopped, the preview holds the take's final frame while it finalizes.
@@ -168,7 +220,8 @@ void Backend::receiveVideo(const QVideoFrame &frame) {
     if(!m_cameraHealthy) {
         m_cameraHealthy=true;
         m_settings.setValue("camera/id",m_cameraId);
-        m_settings.setValue("camera/label",m_camera->cameraDevice().description());
+        const auto entry=m_cameras.value(cameraIndex()).toMap().value("label").toString();
+        m_settings.setValue("camera/label",m_camera ? m_camera->cameraDevice().description() : entry);
         updateReady();
     }
     qint64 captureTime=m_lastVideoAt;
@@ -211,7 +264,8 @@ void Backend::tick() {
     m_pendingPeak=0; emit meterChanged();
     if(m_writer && (m_state=="recording" || m_state=="paused")) { m_duration=m_writer->duration(time)/1000000.0; emit changed(); }
     if((m_state=="starting" || m_state=="ready" || m_state=="recording" || m_state=="paused") && time-m_activatedAt>5000000) {
-        if(m_camera && time-m_lastVideoAt>3000000) sourceFailed("The camera stopped delivering video. Check the connection, then Retry.");
+        if(m_window && time-m_lastVideoAt>3000000) sourceFailed("The window stopped delivering frames.");
+        else if(m_camera && time-m_lastVideoAt>3000000) sourceFailed("The camera stopped delivering video. Check the connection, then Retry.");
         else if(audioEnabled() && m_audio && time-m_lastAudioAt>3000000) sourceFailed("The microphone stopped delivering audio. Check the connection, then Retry.");
     }
 }
@@ -226,6 +280,7 @@ void Backend::selectCamera(int index) {
     if(m_writer || index<0 || index>=m_cameras.size() || m_state=="saving" || m_probing) return;
     m_cameraId=m_cameras[index].toMap()["id"].toString(); activateSources();
 }
+void Backend::selectSource(const QString &id) { selectCamera(indexOf(m_cameras,id)); }
 void Backend::selectMicrophone(int index) {
     if(m_writer || index<0 || index>=m_microphones.size() || m_state=="saving" || m_probing) return;
     m_audioId=m_microphones[index].toMap()["id"].toString(); activateSources();
@@ -296,7 +351,7 @@ void Backend::probeClip(const QString &path,bool currentTake) {
     connect(watcher,&QFutureWatcher<media::Probe>::finished,this,[this,watcher,path,currentTake] {
         const auto result=watcher->result(); watcher->deleteLater(); m_probing=false;
         if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
-        const bool correct=currentTake ? result.size==m_cameraFormat.resolution() && result.audio==audioEnabled() : true;
+        const bool correct=currentTake ? result.size==m_videoSize && result.audio==audioEnabled() : true;
         if(result.ok && correct) {
             m_clipPath=path; m_clipFileName=QFileInfo(path).fileName(); m_duration=result.duration;
             m_state="finished"; m_message=m_interruption; m_clipAudio=result.audio;

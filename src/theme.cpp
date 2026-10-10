@@ -10,6 +10,25 @@
 #include <QStandardPaths>
 #include <cmath>
 
+namespace {
+// Qt probes every FFmpeg hardware device the first time multimedia is used.
+// NVIDIA's VA-API driver segfaults in that probe (XDisplayString inside
+// nvidia_drv_video.so), including when DISPLAY is unset or unauthorized.
+// An explicit empty list skips the probe and keeps the software H.264 encoder.
+// Naming CUDA instead makes Qt open h264_nvenc, which this driver rejects
+// ("10 bit encode not supported"), and the take is stopped before libx264 starts.
+// A value already set in the environment is left alone. This file is linked
+// into the app and the tests, so the workaround is in place before main.
+[[maybe_unused]] const int skipNvidiaVaapiProbe = [] {
+    if (!QFileInfo::exists("/proc/driver/nvidia/version")) return 0;
+    if (!qEnvironmentVariableIsSet("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES"))
+        qputenv("QT_FFMPEG_ENCODING_HW_DEVICE_TYPES", "");
+    if (!qEnvironmentVariableIsSet("QT_FFMPEG_DECODING_HW_DEVICE_TYPES"))
+        qputenv("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "");
+    return 0;
+}();
+}
+
 Theme::Theme(const QString &directory, QObject *parent, const QString &hyprctl) : QObject(parent),
     m_directory(directory.isEmpty() ? QDir::homePath() + "/.local/state/omarchy/current" : directory) {
     m_debounce.setSingleShot(true);

@@ -19,7 +19,7 @@ ApplicationWindow {
     readonly property int cornerRadius: theme.radius
     readonly property bool finished: backend.state === "finished" || backend.state === "saving"
     readonly property bool busy: backend.state === "finalizing" || backend.state === "saving"
-    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
+    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || windowPicker.visible || backend.dialogOpen
     property bool quitting: false
     property var playbackOutput: null
     function time(seconds) {
@@ -159,6 +159,7 @@ ApplicationWindow {
     readonly property color recordColor: "#f0605c"
     readonly property var icons: ({
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
+        window: "M4 5h16a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M3 9h18",
         microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
         chevron: "M6 9l6 6 6-6",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
@@ -341,7 +342,7 @@ ApplicationWindow {
                 visible: backend.state === "unavailable" || backend.state === "starting"
                 Label {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 15
-                    text: backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
+                    text: backend.state === "starting" ? (cameraChoice.windowSource ? "Connecting to the window and microphone…" : "Connecting your camera and microphone…") : backend.message
                 }
                 ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: "Retry"; onClicked: backend.retry() }
             }
@@ -411,12 +412,65 @@ ApplicationWindow {
                     anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                     width: parent.width
                     SourceChoice {
-                        id: cameraChoice; iconPath: win.icons.camera; detail: backend.formatLabel
+                        id: cameraChoice; objectName: "videoSource"; detail: backend.formatLabel
+                        // Cameras stay in this menu. Windows open in the picker: a polled
+                        // list of dozens of windows was resetting the popup scroll.
+                        readonly property var sourceRows: buildRows()
+                        property var stableRows: []
+                        readonly property bool windowSource: {
+                            const list = backend.cameras
+                            const item = list && backend.cameraIndex >= 0 && backend.cameraIndex < list.length ? list[backend.cameraIndex] : null
+                            return !!(item && item.kind === "window")
+                        }
+                        readonly property int sourceIndex: {
+                            const rows = stableRows
+                            const list = backend.cameras || []
+                            const selected = backend.cameraIndex >= 0 && backend.cameraIndex < list.length ? list[backend.cameraIndex] : null
+                            if (!selected) return rows.length ? 0 : -1
+                            for (let i = 0; i < rows.length; i++) {
+                                if (rows[i].kind === "pick") continue
+                                if (selected.kind === "window") {
+                                    if (rows[i].kind === "window" && rows[i].id === selected.id) return i
+                                } else if (rows[i].kind !== "window") {
+                                    const identified = selected.id !== undefined && selected.id !== ""
+                                    if (identified ? rows[i].id === selected.id : rows[i].label === selected.label) return i
+                                }
+                            }
+                            return rows.length ? 0 : -1
+                        }
+                        function buildRows() {
+                            const list = backend.cameras || []
+                            const selected = backend.cameraIndex >= 0 && backend.cameraIndex < list.length ? list[backend.cameraIndex] : null
+                            const rows = []
+                            for (let i = 0; i < list.length; i++) if (!list[i] || list[i].kind !== "window") rows.push(list[i])
+                            if (selected && selected.kind === "window") rows.push(selected)
+                            rows.push({id: "pick-window", label: "Choose a window…", kind: "pick"})
+                            return rows
+                        }
+                        function sameRows(a, b) {
+                            if (!a || !b || a.length !== b.length) return false
+                            for (let i = 0; i < a.length; i++)
+                                if (a[i].id !== b[i].id || a[i].label !== b[i].label || a[i].kind !== b[i].kind) return false
+                            return true
+                        }
+                        iconPath: windowSource ? win.icons.window : win.icons.camera
                         maximumTextWidth: Math.min(260, sources.width - 44)
-                        model: backend.cameras; currentIndex: backend.cameraIndex
+                        model: stableRows
+                        currentIndex: sourceIndex
                         enabled: !backend.takeActive && !win.busy
-                        onActivated: index => { backend.selectCamera(index); liveVideo.forceActiveFocus() }
-                        Accessible.name: "Camera"
+                        onSourceRowsChanged: if (!sameRows(stableRows, sourceRows)) stableRows = sourceRows
+                        onActivated: index => {
+                            const item = stableRows[index]
+                            if (item && item.kind === "pick") windowPicker.open()
+                            else if (item) {
+                                const list = backend.cameras || []
+                                for (let i = 0; i < list.length; i++) if (list[i].id === item.id) { backend.selectCamera(i); break }
+                                liveVideo.forceActiveFocus()
+                            }
+                            currentIndex = Qt.binding(() => sourceIndex)
+                        }
+                        Component.onCompleted: if (!stableRows.length) stableRows = sourceRows
+                        Accessible.name: "Video source"
                     }
                     SourceChoice {
                         id: microphoneChoice; iconPath: win.icons.microphone
@@ -591,6 +645,164 @@ ApplicationWindow {
         Label { width: parent.width; text: overwriteDialog.targetPath + " already exists."; wrapMode: Text.WrapAnywhere }
         onAccepted: backend.confirmOverwrite(true)
         onRejected: backend.confirmOverwrite(false)
+    }
+    ThemedDialog {
+        id: windowPicker; objectName: "windowPicker"
+        anchors.centerIn: parent; modal: true; title: "Choose a window"
+        width: Math.min(win.width - 48, 520)
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        enter: Transition { }
+        exit: Transition { }
+        property real probeY: 0
+        property int probeTick: 0
+        property string probedId: ""
+        property string probedTitle: ""
+        // The hyprctl poll replaces the window list about once a second. Patch
+        // rows in place so the scroll position and highlight stay put.
+        readonly property var windowWatch: backend.cameras
+        function liveWindows() {
+            const list = backend.cameras || []
+            const out = []
+            for (let i = 0; i < list.length; i++)
+                if (list[i] && list[i].kind === "window" && list[i].available !== false) out.push(list[i])
+            return out
+        }
+        function matches(item, query) {
+            if (!query) return true
+            return [item.title, item.label, item.windowClass, item.workspace].join("\n").toLowerCase().indexOf(query) >= 0
+        }
+        function compareText(a, b) {
+            a = String(a || "").toLowerCase(); b = String(b || "").toLowerCase()
+            const na = /^\d+$/.test(a), nb = /^\d+$/.test(b)
+            if (na && nb && a !== b) return parseInt(a, 10) - parseInt(b, 10)
+            return a < b ? -1 : a > b ? 1 : 0
+        }
+        function sorted(rows) {
+            rows.sort((a, b) => compareText(a.workspace, b.workspace) || compareText(a.windowClass, b.windowClass) || compareText(a.title || a.label, b.title || b.label))
+            return rows
+        }
+        function subtitle(item) {
+            const parts = []
+            if (item.windowClass) parts.push(item.windowClass)
+            const ws = String(item.workspace || "")
+            if (ws) parts.push(/^\d+$/.test(ws) ? "Workspace " + ws : ws)
+            return parts.join(" · ")
+        }
+        function rowOf(item) {
+            return {sourceId: item.id, title: item.title || item.label || "Window", subtitle: subtitle(item)}
+        }
+        function syncWindows(rebuild) {
+            if (!windowListView) return
+            const query = filter.text.trim().toLowerCase()
+            const incoming = sorted(liveWindows().filter(item => matches(item, query)))
+            const byId = {}
+            for (let i = 0; i < incoming.length; i++) byId[incoming[i].id] = incoming[i]
+            const selected = windowListView.currentIndex >= 0 && windowListView.currentIndex < windowRows.count ? windowRows.get(windowListView.currentIndex).sourceId : ""
+            if (!rebuild && windowRows.count > 0) {
+                for (let i = windowRows.count - 1; i >= 0; i--) if (!byId[windowRows.get(i).sourceId]) windowRows.remove(i)
+                const present = {}
+                for (let i = 0; i < windowRows.count; i++) {
+                    const id = windowRows.get(i).sourceId
+                    present[id] = true
+                    const row = rowOf(byId[id])
+                    if (windowRows.get(i).title !== row.title) windowRows.setProperty(i, "title", row.title)
+                    if (windowRows.get(i).subtitle !== row.subtitle) windowRows.setProperty(i, "subtitle", row.subtitle)
+                }
+                for (let i = 0; i < incoming.length; i++) if (!present[incoming[i].id]) windowRows.append(rowOf(incoming[i]))
+            } else {
+                windowRows.clear()
+                for (let i = 0; i < incoming.length; i++) windowRows.append(rowOf(incoming[i]))
+                windowListView.contentY = 0
+            }
+            let idx = -1
+            const keep = rebuild ? "" : selected
+            if (keep) for (let i = 0; i < windowRows.count; i++) if (windowRows.get(i).sourceId === keep) { idx = i; break }
+            if (idx < 0) idx = windowRows.count ? (rebuild ? 0 : Math.min(Math.max(windowListView.currentIndex, 0), windowRows.count - 1)) : -1
+            if (windowListView.currentIndex !== idx) windowListView.currentIndex = idx
+        }
+        function move(delta) {
+            if (!windowRows.count) return
+            const next = Math.max(0, Math.min(windowRows.count - 1, (windowListView.currentIndex < 0 ? 0 : windowListView.currentIndex) + delta))
+            windowListView.currentIndex = next
+            windowListView.positionViewAtIndex(next, ListView.Contain)
+        }
+        function choose(sourceId) {
+            if (!sourceId && windowListView.currentIndex >= 0 && windowListView.currentIndex < windowRows.count)
+                sourceId = windowRows.get(windowListView.currentIndex).sourceId
+            if (!sourceId) return
+            close()
+            backend.selectSource(sourceId)
+        }
+        onWindowWatchChanged: if (visible) syncWindows(false)
+        onAboutToShow: { filter.text = ""; syncWindows(true); filter.forceActiveFocus() }
+        onProbeTickChanged: {
+            const item = windowListView.itemAt(20, probeY)
+            probedId = item ? item.sourceId : ""
+            probedTitle = item ? item.title : ""
+        }
+        ColumnLayout {
+            width: parent.width; spacing: 8
+            TextField {
+                id: filter; objectName: "windowPickerFilter"
+                Layout.fillWidth: true
+                placeholderText: "Filter by title or application"
+                font.pixelSize: 14; color: win.textColor; placeholderTextColor: win.faintColor
+                leftPadding: 12; rightPadding: 12; implicitHeight: 40; selectByMouse: true
+                background: Rectangle {
+                    color: "#161618"; radius: Math.min(8, win.cornerRadius)
+                    border.width: 1; border.color: filter.activeFocus ? win.accent : "#39393e"
+                }
+                onTextChanged: if (windowPicker.visible) windowPicker.syncWindows(true)
+                Keys.onUpPressed: event => { event.accepted = true; windowPicker.move(-1) }
+                Keys.onDownPressed: event => { event.accepted = true; windowPicker.move(1) }
+                Keys.onReturnPressed: event => { event.accepted = true; windowPicker.choose() }
+                Keys.onEnterPressed: event => { event.accepted = true; windowPicker.choose() }
+            }
+            Item {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(360, Math.max(140, win.height - 230))
+                ListView {
+                id: windowListView; objectName: "windowPickerList"
+                anchors.fill: parent
+                clip: true; boundsBehavior: Flickable.StopAtBounds
+                highlightFollowsCurrentItem: false
+                model: ListModel { id: windowRows }
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Item {
+                    id: row
+                    required property int index
+                    required property string sourceId
+                    required property string title
+                    required property string subtitle
+                    width: windowListView.width; height: 48
+                    Rectangle {
+                        anchors.fill: parent; anchors.leftMargin: 2; anchors.rightMargin: 2
+                        radius: Math.min(6, win.cornerRadius)
+                        color: row.index === windowListView.currentIndex ? "#2a2a30" : rowArea.containsMouse ? "#1c1c20" : "transparent"
+                        border.width: row.index === windowListView.currentIndex ? 1 : 0; border.color: win.accent
+                    }
+                    Column {
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 1
+                        Label { width: parent.width; text: row.title; elide: Text.ElideRight; font.pixelSize: 13; color: win.textColor }
+                        Label { width: parent.width; visible: row.subtitle !== ""; text: row.subtitle; elide: Text.ElideRight; font.pixelSize: 11; color: win.dimColor }
+                    }
+                    MouseArea {
+                        id: rowArea; anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: windowPicker.choose(row.sourceId)
+                    }
+                }
+                }
+                Label {
+                    objectName: "windowPickerEmpty"
+                    anchors.centerIn: parent
+                    visible: windowRows.count === 0
+                    text: filter.text.trim() ? "No matching windows" : "No windows are open"
+                    color: win.dimColor; font.pixelSize: 13
+                }
+            }
+        }
     }
     ThemedDialog {
         id: helpDialog; anchors.centerIn: parent; modal: true; title: "Keyboard shortcuts"; standardButtons: Dialog.Close
