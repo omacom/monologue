@@ -16,6 +16,7 @@
 #include "theme.h"
 #include "writer.h"
 #include "backend.h"
+#include "windowlist.h"
 
 class FakePicker : public FilePicker {
 public:
@@ -116,6 +117,45 @@ private slots:
         QVERIFY(write(response,"{\"int\":0}")); QTRY_COMPARE(theme.radius(),0);
         QVERIFY(write(response,"{\"int\":8}")); QTRY_COMPARE(theme.radius(),8);
         QVERIFY(write(response,"unavailable")); QTest::qWait(1200); QCOMPARE(theme.radius(),8);
+    }
+    void windowList() {
+        // A normal string: moc stops parsing a raw string that contains \".
+        const auto json = QByteArray("["
+            "{\"address\":\"0xd161e7b0\",\"mapped\":true,\"hidden\":false,\"class\":\"kitty\",\"title\":\"notes\",\"pid\":10,\"workspace\":{\"id\":3,\"name\":\"3\"}},"
+            "{\"address\":\"0x10000d161e7b0\",\"mapped\":true,\"hidden\":false,\"class\":\"firefox\",\"title\":\"Firefox\",\"pid\":11},"
+            "{\"address\":\"0x55aa\",\"mapped\":false,\"hidden\":false,\"class\":\"gone\",\"title\":\"Gone\",\"pid\":12},"
+            "{\"address\":\"0x66bb\",\"mapped\":true,\"hidden\":true,\"class\":\"secret\",\"title\":\"Secret\",\"pid\":13},"
+            "{\"address\":\"0x77cc\",\"mapped\":true,\"hidden\":false,\"class\":\"monologue\",\"title\":\"Monologue\",\"pid\":42},"
+            "{\"address\":\"0x0\",\"mapped\":true,\"hidden\":false,\"class\":\"bad\",\"title\":\"Bad\",\"pid\":14},"
+            "{\"address\":\"0x88dd\",\"mapped\":true,\"hidden\":false,\"class\":\"kitty\",\"title\":\"\",\"pid\":15},"
+            "{\"address\":\"0x99ee\",\"mapped\":true,\"hidden\":false,\"class\":\"firefox\",\"title\":\"Firefox\",\"pid\":16},"
+            "{\"address\":\"aabb\",\"mapped\":true,\"hidden\":false,\"class\":\"quote\",\"title\":\"say \\\"hi\\\"\",\"pid\":17}"
+            "]");
+        const auto list = window::clientsFromHyprctl(json, 42);
+        QVERIFY(list);
+        QCOMPARE(list->size(), 6);
+        QCOMPARE(list->at(0).id, QString("window:0xd161e7b0"));
+        QCOMPARE(list->at(0).label, QString("notes"));
+        QCOMPARE(list->at(0).title, QString("notes"));
+        QCOMPARE(list->at(0).windowClass, QString("kitty"));
+        QCOMPARE(list->at(0).workspace, QString("3"));
+        QCOMPARE(list->at(0).handle, 3512854448u);
+        QCOMPARE(list->at(1).id, QString("window:0x10000d161e7b0"));
+        QCOMPARE(list->at(1).handle, 3512854448u);
+        QCOMPARE(list->at(2).label, QString("Secret"));
+        QCOMPARE(list->at(3).label, QString("kitty"));
+        QVERIFY(list->at(1).label.startsWith("Firefox · "));
+        QVERIFY(list->at(4).label.startsWith("Firefox · "));
+        QVERIFY(list->at(1).label != list->at(4).label);
+        QCOMPARE(list->at(5).label, QString("say \"hi\""));
+        QCOMPARE(list->at(5).handle, quint32(0xaabb));
+        QVERIFY(!window::clientsFromHyprctl("nope", 1));
+        QVERIFY(!window::clientsFromHyprctl("{\"address\":\"0x1\"}", 1));
+        const auto empty = window::clientsFromHyprctl("[]", 1);
+        QVERIFY(empty); QVERIFY(empty->isEmpty());
+        Backend backend(new FakePicker, false);
+        QTest::qWait(50);
+        QCOMPARE(backend.state(), QString("starting"));
     }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
     void realEncoding() {

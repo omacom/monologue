@@ -18,6 +18,8 @@
 #include "thumbnails.h"
 #include "portalfilepicker.h"
 
+class WindowCapture;
+class WindowList;
 class Backend : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString state READ state NOTIFY changed)
@@ -78,6 +80,7 @@ public:
     edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
     Q_INVOKABLE void selectCamera(int index);
+    Q_INVOKABLE void selectSource(const QString &id);
     Q_INVOKABLE void selectMicrophone(int index);
     Q_INVOKABLE void retry();
     Q_INVOKABLE void toggleRecording();
@@ -110,7 +113,7 @@ private:
     qint64 now() const { return m_wall.nsecsElapsed() / 1000; }
     void refreshDevices();
     void activateSources();
-    // keepPicture leaves the last camera frame on screen, e.g. while a stopped take finalizes.
+    // keepPicture leaves the last frame on screen, e.g. while a stopped take finalizes.
     void releaseSources(bool keepPicture = false);
     void readAudio();
     void receiveAudio(const QByteArray &data, qint64 capturedAt);
@@ -138,10 +141,13 @@ private:
     QVideoSink m_sink;
     QPointer<QVideoSink> m_preview;
     QCamera *m_camera = nullptr;
+    WindowCapture *m_window = nullptr;
+    WindowList *m_windowList = nullptr;
     AudioCapture *m_audio = nullptr;
     QAudioFormat m_audioFormat;
     QVideoFrame m_lastFrame;
     QCameraFormat m_cameraFormat;
+    QSize m_videoSize;
     QElapsedTimer m_wall;
     QTimer m_tick;
     QTimer m_finishTimeout;

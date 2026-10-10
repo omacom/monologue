@@ -81,6 +81,8 @@ QtObject {
     function undo() { clips = [{start: 0, end: 84}]; canUndo = false }
     function redo() {}
     function retry() {}
+    property string chosenSource: ""
+    function selectSource(id) { chosenSource = id }
 }
 )",QUrl());
         QScopedPointer<QObject> backend(fake.create()); QVERIFY2(backend,qPrintable(fake.errorString()));
@@ -233,6 +235,50 @@ QtObject {
         QVERIFY(write(response,"{\"int\":0}"));
         QTRY_COMPARE(dialogBackground->property("radius").toInt(),0);
         QCOMPARE(buttonBackground->property("radius").toInt(),0);
+        // The source menu lists cameras plus one picker entry. Window polls must not
+        // throw away the picker's scroll position or the row under the viewport.
+        QVariantList sources;
+        sources << QVariantMap{{"id","cam"},{"label","Test camera"},{"kind","camera"}};
+        for(int i=0;i<40;++i) sources << QVariantMap{{"id",QString("window:%1").arg(i)},{"label",QString("Title %1").arg(i)},{"kind","window"},{"title",QString("Title %1").arg(i)},{"windowClass","app"},{"workspace","1"},{"available",true}};
+        backend->setProperty("cameras",sources); backend->setProperty("cameraIndex",0); QTest::qWait(50);
+        auto *videoSource=window->findChild<QQuickItem*>("videoSource"); QVERIFY(videoSource);
+        QCOMPARE(videoSource->property("count").toInt(),2);
+        auto *picker=window->findChild<QObject*>("windowPicker"); QVERIFY(picker);
+        QMetaObject::invokeMethod(picker,"open");
+        QTRY_VERIFY(picker->property("opened").toBool());
+        auto *pickerList=window->findChild<QQuickItem*>("windowPickerList"); QVERIFY(pickerList);
+        QTRY_COMPARE(pickerList->property("count").toInt(),40);
+        QTest::qWait(50);
+        pickerList->setProperty("contentY",500);
+        QTRY_VERIFY(pickerList->property("contentY").toDouble()>400);
+        auto probe=[&] {
+            picker->setProperty("probeY",pickerList->property("contentY").toDouble()+12);
+            picker->setProperty("probeTick",picker->property("probeTick").toInt()+1);
+            QTest::qWait(20);
+            return picker->property("probedId").toString();
+        };
+        QString anchored;
+        for(int i=0;i<20 && anchored.isEmpty();++i) anchored=probe();
+        QVERIFY(!anchored.isEmpty());
+        const double scrolled=pickerList->property("contentY").toDouble();
+        QVariantList reshuffled;
+        reshuffled << QVariantMap{{"id","cam"},{"label","Test camera"},{"kind","camera"}};
+        for(int i=39;i>=0;--i) {
+            const auto id=QString("window:%1").arg(i);
+            reshuffled << QVariantMap{{"id",id},{"label",id==anchored?"Renamed title":QString("Title %1").arg(i)},{"kind","window"},
+                {"title",id==anchored?QString("Renamed title"):QString("Title %1").arg(i)},{"windowClass","app"},{"workspace","1"},{"available",true}};
+        }
+        backend->setProperty("cameras",reshuffled); QTest::qWait(50);
+        QCOMPARE(probe(),anchored);
+        QCOMPARE(picker->property("probedTitle").toString(),QString("Renamed title"));
+        QVERIFY(pickerList->property("contentY").toDouble()>scrolled-1);
+        auto *filter=window->findChild<QQuickItem*>("windowPickerFilter"); QVERIFY(filter);
+        auto *empty=window->findChild<QQuickItem*>("windowPickerEmpty"); QVERIFY(empty);
+        filter->setProperty("text","zzz"); QTRY_COMPARE(pickerList->property("count").toInt(),0); QVERIFY(empty->isVisible());
+        filter->setProperty("text",""); QTRY_COMPARE(pickerList->property("count").toInt(),40);
+        QTest::keyClick(window,Qt::Key_Down); QTest::keyClick(window,Qt::Key_Return);
+        QVERIFY(backend->property("chosenSource").toString().startsWith("window:"));
+        QTRY_VERIFY(!picker->property("visible").toBool());
         delete window;
         QVERIFY2(warnings.isEmpty(),qPrintable(warnings.join('\n')));
     }
