@@ -5,6 +5,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
@@ -67,7 +68,10 @@ QString Encoder::open(const Settings &settings, std::function<void(const QString
     int result = avformat_alloc_output_context2(&m_format, nullptr, "mp4", path.constData());
     if (result < 0) return failure("Could not create the MP4", result);
     auto error = openVideo(settings, true);
-    if (!error.isEmpty()) error = openVideo(settings, false);
+    if (!error.isEmpty()) {
+        releaseVideo();
+        error = openVideo(settings, false);
+    }
     if (error.isEmpty() && settings.audio.isValid()) error = openAudio(settings.audio);
     if (error.isEmpty() && (result = avio_open(&m_format->pb, path.constData(), AVIO_FLAG_WRITE)) < 0)
         error = failure("Could not open the recording file", result);
@@ -92,6 +96,11 @@ QString Encoder::openVideo(const Settings &settings, bool hardware) {
     m_video->time_base = av_inv_q(rate);
     // Keyframes every two seconds keep the editor's seeking quick.
     m_video->gop_size = std::max(1, int(settings.fps * 2));
+    // No B-frames, so the libx264 fallback has the same low-delay timestamps as VAAPI.
+    m_video->max_b_frames = 0;
+    // 5.1 covers 4K30. 4.2 is enough at 1080p and below.
+    m_video->level = settings.size.height() > 1080 ? 51 : 42;
+    m_video->profile = AV_PROFILE_H264_HIGH;
     m_video->color_range = AVCOL_RANGE_MPEG;
     m_video->colorspace = AVCOL_SPC_BT470BG;
     if (m_format->oformat->flags & AVFMT_GLOBALHEADER) m_video->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -112,7 +121,6 @@ QString Encoder::openVideo(const Settings &settings, bool hardware) {
         }
         m_video->hw_frames_ctx = frames;
         m_video->pix_fmt = AV_PIX_FMT_VAAPI;
-        m_video->profile = AV_PROFILE_H264_HIGH;
         // Constant QP 20 is close to the CRF 19 libx264 quality Qt used.
         m_video->global_quality = 20;
         av_dict_set(&options, "rc_mode", "CQP", 0);
@@ -131,8 +139,15 @@ QString Encoder::openVideo(const Settings &settings, bool hardware) {
     m_software->format = software;
     m_software->width = m_video->width;
     m_software->height = m_video->height;
-    if ((result = av_frame_get_buffer(m_software, 0)) < 0) return failure("Could not allocate a video frame", result);
+    if ((result = av_frame_get_buffer(m_software, 0)) < 0) {
+        releaseVideo();
+        return failure("Could not allocate a video frame", result);
+    }
     m_videoStream = avformat_new_stream(m_format, nullptr);
+    if (!m_videoStream) {
+        releaseVideo();
+        return "Could not add the video stream.";
+    }
     m_videoStream->time_base = m_video->time_base;
     m_videoStream->avg_frame_rate = rate;
     avcodec_parameters_from_context(m_videoStream->codecpar, m_video);
@@ -234,11 +249,20 @@ QString Encoder::encodeVideo(const QVideoFrame &source) {
         for (int i = 0; i < frame.planeCount(); ++i) { planes[i] = frame.bits(i); strides[i] = frame.bytesPerLine(i); }
     }
     const QSize size = image.isNull() ? frame.size() : image.size();
-    m_scale = sws_getCachedContext(m_scale, size.width(), size.height(), format,
-                                   m_video->width, m_video->height, AVPixelFormat(m_software->format),
-                                   SWS_BILINEAR, nullptr, nullptr, nullptr);
-    int result = m_scale ? av_frame_make_writable(m_software) : AVERROR(EINVAL);
-    if (result >= 0) sws_scale(m_scale, planes, strides, 0, size.height(), m_software->data, m_software->linesize);
+    const bool sameSize = size.width() == m_video->width && size.height() == m_video->height;
+    const bool sameFormat = format == AVPixelFormat(m_software->format);
+    int result = av_frame_make_writable(m_software);
+    if (result >= 0 && sameSize && sameFormat) {
+        const uint8_t *sourcePlanes[4] = {planes[0], planes[1], planes[2], planes[3]};
+        av_image_copy(m_software->data, m_software->linesize, sourcePlanes, strides, format, size.width(), size.height());
+    } else if (result >= 0) {
+        // Same-size conversion is a shuffle (YUV420P to NV12), not a resample.
+        m_scale = sws_getCachedContext(m_scale, size.width(), size.height(), format,
+                                       m_video->width, m_video->height, AVPixelFormat(m_software->format),
+                                       sameSize ? SWS_POINT : SWS_BILINEAR, nullptr, nullptr, nullptr);
+        if (!m_scale || sws_scale(m_scale, planes, strides, 0, size.height(), m_software->data, m_software->linesize) <= 0)
+            result = AVERROR(EINVAL);
+    }
     if (image.isNull()) frame.unmap();
     if (result < 0) return failure("Could not convert a camera frame", result);
     // Frame times are already quantized to the output rate.
@@ -316,6 +340,11 @@ QString Encoder::close() {
     }
     release();
     return error;
+}
+void Encoder::releaseVideo() {
+    avcodec_free_context(&m_video);
+    av_buffer_unref(&m_device);
+    av_frame_free(&m_software);
 }
 void Encoder::release() {
     avcodec_free_context(&m_video);

@@ -45,6 +45,9 @@ private:
     struct Job { QVideoFrame frame; QByteArray pcm; };
     QString openVideo(const Settings &settings, bool hardware);
     QString openAudio(const QAudioFormat &format);
+    // Frees the video codec and VAAPI device. The MP4 context stays open so a
+    // failed GPU open can fall back to libx264 before the header is written.
+    void releaseVideo();
     void run();
     QString encodeVideo(const QVideoFrame &source);
     QString encodeAudio(const QByteArray &pcm, bool flush);

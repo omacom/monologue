@@ -204,6 +204,8 @@ private slots:
                 // Standard 8-bit 4:2:0 High profile, which every player decodes.
                 QCOMPARE(stream["pix_fmt"].toString(),QString("yuv420p"));
                 QCOMPARE(stream["profile"].toString(),QString("High"));
+                QCOMPARE(stream["level"].toString().toInt(),42);
+                QCOMPARE(stream["has_b_frames"].toString().toInt(),0);
             }
         }
         if(sound) {
@@ -429,6 +431,37 @@ private slots:
             QVERIFY2(std::abs(flashes[i]-expected)<.002,qPrintable(QString("Flash %1 at %2, expected %3").arg(i).arg(flashes[i]).arg(expected)));
             QVERIFY2(std::abs(flashes[i]-clicks[i])<.01,qPrintable(QString("Event %1: video %2, audio %3").arg(i).arg(flashes[i]).arg(clicks[i])));
         }
+    }
+    void softwareEncoderMatches() {
+        // A missing VAAPI driver must fall back to libx264 with the same constraints.
+        struct Driver {
+            const QByteArray previous = qgetenv("LIBVA_DRIVER_NAME");
+            const bool had = qEnvironmentVariableIsSet("LIBVA_DRIVER_NAME");
+            Driver() { qputenv("LIBVA_DRIVER_NAME", "monologue-no-such-driver"); }
+            ~Driver() { if (had) qputenv("LIBVA_DRIVER_NAME", previous); else qunsetenv("LIBVA_DRIVER_NAME"); }
+        } driver;
+        Q_UNUSED(driver);
+        QTemporaryDir directory;
+        const auto path = directory.filePath("software.mp4");
+        Writer writer; QSignalSpy ended(&writer, &Writer::finished), errors(&writer, &Writer::failed);
+        QVERIFY(writer.start(path, QVideoFrameFormat(QSize(64, 64), QVideoFrameFormat::Format_BGRA8888), 30, {}, 0));
+        QImage image(64, 64, QImage::Format_RGB32); image.fill(Qt::gray);
+        for (int i = 0; i < 10; ++i) {
+            writer.video(QVideoFrame(image), qRound64(i * 1000000.0 / 30));
+            QTest::qWait(5);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 15000);
+        QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
+        QProcess streams; streams.start("ffprobe", {"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,profile,level,has_b_frames,nb_frames:stream_tags=encoder", "-of", "json", path});
+        QVERIFY(streams.waitForFinished());
+        const auto stream = QJsonDocument::fromJson(streams.readAllStandardOutput()).object()["streams"].toArray().first().toObject();
+        QCOMPARE(stream["pix_fmt"].toString(), QString("yuv420p"));
+        QCOMPARE(stream["profile"].toString(), QString("High"));
+        QCOMPARE(stream["level"].toString().toInt(), 42);
+        QCOMPARE(stream["has_b_frames"].toString().toInt(), 0);
+        QCOMPARE(stream["nb_frames"].toString().toInt(), 10);
+        const auto encoder = stream["tags"].toObject()["encoder"].toString();
+        QVERIFY2(encoder.contains("libx264"), qPrintable(encoder));
     }
 };
 int main(int argc,char**argv) {
