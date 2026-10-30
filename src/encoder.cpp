@@ -152,6 +152,7 @@ QString Encoder::openVideo(const Settings &settings, bool hardware) {
     m_videoStream->avg_frame_rate = rate;
     avcodec_parameters_from_context(m_videoStream->codecpar, m_video);
     m_videoEncoderName = codec->name;
+    av_dict_set(&m_videoStream->metadata, "encoder", m_videoEncoderName.toUtf8().constData(), 0);
     return {};
 }
 QString Encoder::openAudio(const QAudioFormat &format) {
@@ -268,6 +269,7 @@ QString Encoder::encodeVideo(const QVideoFrame &source) {
     // Frame times are already quantized to the output rate.
     m_software->pts = av_rescale_q_rnd(frame.startTime(), {1, 1000000}, m_video->time_base,
                                        AVRounding(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX));
+    m_videoStarted = true;
     if (!m_device) return send(m_video, m_videoStream, m_software);
     AVFrame *upload = av_frame_alloc();
     if ((result = av_hwframe_get_buffer(m_video->hw_frames_ctx, upload, 0)) < 0 ||
@@ -331,7 +333,8 @@ QString Encoder::send(AVCodecContext *codec, AVStream *stream, AVFrame *frame) {
 }
 QString Encoder::close() {
     QString error;
-    if (m_video) error = send(m_video, m_videoStream, nullptr);
+    // VAAPI faults if flushed before any frame. A take can stop on bad JPEGs first.
+    if (m_video && m_videoStarted) error = send(m_video, m_videoStream, nullptr);
     if (m_audio) { const auto audio = send(m_audio, m_audioStream, nullptr); if (error.isEmpty()) error = audio; }
     if (m_headerWritten) {
         const int result = av_write_trailer(m_format);

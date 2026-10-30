@@ -75,6 +75,7 @@ QList<qint64> TakeClock::joins() const {
 }
 
 Writer::Writer(QObject *parent) : QObject(parent) {
+    m_decodePool.setMaxThreadCount(2);
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
     connect(&m_flushTimeout, &QTimer::timeout, this, [this] {
@@ -132,14 +133,22 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
         drain();
         return;
     }
-    auto decoded = QtConcurrent::run([frame, stamp]() mutable {
-        if (!frame.map(QVideoFrame::ReadOnly)) return QVideoFrame();
-        auto result = media::decodeJpeg(QByteArrayView(frame.bits(0), frame.mappedBytes(0)));
-        frame.unmap();
+    // Copy the compressed bytes here. The worker must not map the preview's frame.
+    if (!frame.map(QVideoFrame::ReadOnly)) { noteBadFrame(); return; }
+    const QByteArray jpeg(reinterpret_cast<const char *>(frame.bits(0)), frame.mappedBytes(0));
+    frame.unmap();
+    if (jpeg.isEmpty()) { noteBadFrame(); return; }
+    auto decoded = QtConcurrent::run(&m_decodePool, [jpeg, stamp] {
+        auto result = media::decodeJpeg(QByteArrayView(jpeg));
         return result.isValid() ? stamp(result) : result;
     });
     m_frames.enqueue(decoded);
     decoded.then(this, [this](const QVideoFrame &) { drain(); });
+}
+bool Writer::noteBadFrame() {
+    if (++m_badDecodes < 15) return false;
+    fail("A camera frame could not be decoded, so the take was stopped.");
+    return true;
 }
 void Writer::audio(QByteArray data, qint64 capturedAt) {
     if (m_stopping || m_failed || !m_audioFormat.isValid() || data.isEmpty()) return;
@@ -185,7 +194,11 @@ void Writer::drain() {
     if (m_failed || m_closing) return;
     while (!m_frames.isEmpty() && m_frames.head().isFinished()) {
         const auto frame = m_frames.dequeue().result();
-        if (!frame.isValid()) { fail("A camera frame could not be decoded, so the take was stopped."); return; }
+        if (!frame.isValid()) {
+            if (noteBadFrame()) return;
+            continue;
+        }
+        m_badDecodes = 0;
         m_encoder->video(frame);
     }
     if (m_stopping && m_frames.isEmpty()) close(false);

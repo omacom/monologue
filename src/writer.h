@@ -4,6 +4,7 @@
 #include <QVideoFrame>
 #include <QFuture>
 #include <QQueue>
+#include <QThreadPool>
 #include <QTimer>
 #include <memory>
 #include <optional>
@@ -56,14 +57,21 @@ private:
     void appendAudio(const QByteArray &data);
     void padAudioTo(qint64 time);
     void videoAt(QVideoFrame frame, qint64 position);
+    // A single bad JPEG is skipped. Several in a row stop the take.
+    bool noteBadFrame();
     std::unique_ptr<Encoder> m_encoder;
     QAudioFormat m_audioFormat;
+    // At most two 4K decodes at once, so the pool cannot occupy every core.
+    // Declared before the queue: the queue is destroyed first, then the pool
+    // waits for a decode that is still running.
+    QThreadPool m_decodePool;
     // In capture order; JPEG frames resolve once decoded off the GUI thread.
     QQueue<QFuture<QVideoFrame>> m_frames;
     QVideoFrame m_tailFrame;
     QTimer m_flushTimeout;
     TakeClock m_clock;
     qint64 m_lastVideo = -1;
+    int m_badDecodes = 0;
     qint64 m_frameDuration = 33333;
     double m_fps = 30;
     qint64 m_audioFramesWritten = 0;

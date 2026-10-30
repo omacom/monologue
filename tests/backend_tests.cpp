@@ -9,6 +9,7 @@
 #include <QGuiApplication>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QAbstractVideoBuffer>
 #include <QStandardPaths>
 #include <QSettings>
 #include <cmath>
@@ -17,6 +18,41 @@
 #include "theme.h"
 #include "writer.h"
 #include "backend.h"
+
+namespace {
+// The plane size is the JPEG size. A frame created from QVideoFrameFormat
+// alone can report a larger mapped buffer than the compressed bytes.
+class JpegBytes : public QAbstractVideoBuffer {
+public:
+    JpegBytes(QByteArray bytes, QSize size) : m_bytes(std::move(bytes)), m_format(size, QVideoFrameFormat::Format_Jpeg) {}
+    QVideoFrameFormat format() const override { return m_format; }
+    MapData map(QVideoFrame::MapMode) override {
+        MapData result;
+        result.planeCount = 1;
+        result.data[0] = reinterpret_cast<uchar *>(m_bytes.data());
+        result.bytesPerLine[0] = int(m_bytes.size());
+        result.dataSize[0] = int(m_bytes.size());
+        return result;
+    }
+    void unmap() override {}
+private:
+    QByteArray m_bytes;
+    QVideoFrameFormat m_format;
+};
+QVideoFrame jpegFrame(const QByteArray &bytes) {
+    return QVideoFrame(std::make_unique<JpegBytes>(bytes, QSize(64, 32)));
+}
+QByteArray sampleJpeg() {
+    QImage image(64, 32, QImage::Format_RGB888); image.fill(Qt::red);
+    tjhandle tj = tj3Init(TJINIT_COMPRESS);
+    tj3Set(tj, TJPARAM_SUBSAMP, TJSAMP_420); tj3Set(tj, TJPARAM_QUALITY, 90);
+    unsigned char *jpeg = nullptr; size_t size = 0;
+    const int rc = tj3Compress8(tj, image.constBits(), 64, int(image.bytesPerLine()), 32, TJPF_RGB, &jpeg, &size);
+    QByteArray bytes; if (rc == 0) bytes = QByteArray(reinterpret_cast<const char *>(jpeg), qsizetype(size));
+    tj3Free(jpeg); tj3Destroy(tj);
+    return bytes;
+}
+}
 
 class FakePicker : public FilePicker {
 public:
@@ -204,8 +240,8 @@ private slots:
                 // Standard 8-bit 4:2:0 High profile, which every player decodes.
                 QCOMPARE(stream["pix_fmt"].toString(),QString("yuv420p"));
                 QCOMPARE(stream["profile"].toString(),QString("High"));
-                QCOMPARE(stream["level"].toString().toInt(),42);
-                QCOMPARE(stream["has_b_frames"].toString().toInt(),0);
+                QCOMPARE(stream["level"].toInt(),42);
+                QCOMPARE(stream["has_b_frames"].toInt(),0);
             }
         }
         if(sound) {
@@ -432,6 +468,33 @@ private slots:
             QVERIFY2(std::abs(flashes[i]-clicks[i])<.01,qPrintable(QString("Event %1: video %2, audio %3").arg(i).arg(flashes[i]).arg(clicks[i])));
         }
     }
+    void badJpegIsSkipped() {
+        const auto good = sampleJpeg();
+        QVERIFY(!good.isEmpty());
+        QTemporaryDir directory;
+        const auto path = directory.filePath("skip.mp4");
+        {
+            Writer writer; QSignalSpy ended(&writer, &Writer::finished), errors(&writer, &Writer::failed);
+            QVERIFY(writer.start(path, QVideoFrameFormat(QSize(64, 32), QVideoFrameFormat::Format_YUV420P), 30, {}, 0));
+            writer.video(jpegFrame(QByteArray("not a jpeg")), 0);
+            for (int i = 1; i <= 4; ++i) writer.video(jpegFrame(good), qRound64(i * 1000000.0 / 30));
+            writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 15000);
+            QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
+            QProcess streams; streams.start("ffprobe", {"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=nb_frames", "-of", "csv=p=0", path});
+            QVERIFY(streams.waitForFinished());
+            QCOMPARE(streams.readAllStandardOutput().trimmed().toInt(), 4);
+        }
+        Writer writer; QSignalSpy ended(&writer, &Writer::finished), errors(&writer, &Writer::failed);
+        QVERIFY(writer.start(directory.filePath("stop.mp4"), QVideoFrameFormat(QSize(64, 32), QVideoFrameFormat::Format_YUV420P), 30, {}, 0));
+        for (int i = 0; i < 15; ++i) {
+            // Let each undecodable frame leave the eight-frame queue before the next.
+            writer.video(jpegFrame(QByteArray("not a jpeg")), qRound64(i * 1000000.0 / 30));
+            QTest::qWait(50);
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(errors.size(), 1, 5000);
+        QCOMPARE(errors.first().first().toString(), QString("A camera frame could not be decoded, so the take was stopped."));
+        QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 5000);
+    }
     void softwareEncoderMatches() {
         // A missing VAAPI driver must fall back to libx264 with the same constraints.
         struct Driver {
@@ -452,16 +515,16 @@ private slots:
         }
         writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 15000);
         QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
-        QProcess streams; streams.start("ffprobe", {"-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,profile,level,has_b_frames,nb_frames:stream_tags=encoder", "-of", "json", path});
+        QProcess streams; streams.start("ffprobe", {"-v", "error", "-select_streams", "v:0", "-show_streams", "-of", "json", path});
         QVERIFY(streams.waitForFinished());
-        const auto stream = QJsonDocument::fromJson(streams.readAllStandardOutput()).object()["streams"].toArray().first().toObject();
+        const auto output = streams.readAllStandardOutput();
+        const auto stream = QJsonDocument::fromJson(output).object()["streams"].toArray().first().toObject();
         QCOMPARE(stream["pix_fmt"].toString(), QString("yuv420p"));
         QCOMPARE(stream["profile"].toString(), QString("High"));
-        QCOMPARE(stream["level"].toString().toInt(), 42);
-        QCOMPARE(stream["has_b_frames"].toString().toInt(), 0);
+        QCOMPARE(stream["level"].toInt(), 42);
+        QCOMPARE(stream["has_b_frames"].toInt(), 0);
         QCOMPARE(stream["nb_frames"].toString().toInt(), 10);
-        const auto encoder = stream["tags"].toObject()["encoder"].toString();
-        QVERIFY2(encoder.contains("libx264"), qPrintable(encoder));
+        QVERIFY2(stream["tags"].toObject()["encoder"].toString().contains("libx264"), output.constData());
     }
 };
 int main(int argc,char**argv) {

@@ -65,7 +65,7 @@ private:
     QAudioFormat m_audioFormat;
     QString m_videoEncoderName;
     qint64 m_audioSamples = 0;
-    bool m_headerWritten = false;
+    bool m_headerWritten = false, m_videoStarted = false;
     std::thread m_thread;
     std::mutex m_mutex;
     std::condition_variable m_wake;
