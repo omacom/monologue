@@ -42,6 +42,10 @@ private slots:
         f.append({{3840,2160},30,60,0}); QCOMPARE(media::bestFormat(f),3);
         QCOMPARE(media::bestFormat({}),-1);
         QCOMPARE(media::targetFps(15,15),15.0);
+        // Brio 500 lists raw 2560x1440 at 2 fps above MJPEG 1920x1080 at 30.
+        QCOMPARE(media::bestFormat({{{2560,1440},2,2,0}, {{1920,1080},5,5,0}, {{1920,1080},15,30,1}, {{1280,720},30,60,1}}), 2);
+        // A camera whose every mode is slower than 15 fps still records at its largest size.
+        QCOMPARE(media::bestFormat({{{1280,720},10,10,0}, {{640,480},10,12,0}}), 0);
     }
     void clockExcludesPauses() {
         TakeClock c; c.start(1000000);

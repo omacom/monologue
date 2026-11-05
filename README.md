@@ -3,7 +3,7 @@
 A simple webcam recorder for Omarchy. Choose your camera and microphone once, then press **Space** to record. Press again to pause or resume the same take. Stop the take and it opens right away in a built-in editor: trim either end, cut ranges out of the middle, then **Save**.
 
 - Remembers camera and microphone by device ID; missing inputs never silently switch.
-- Automatically selects the camera's maximum advertised video resolution, preferring 30 fps at that resolution. Preview preserves the whole frame.
+- Automatically selects the camera's maximum advertised video resolution, preferring 30 fps at that resolution. A mode slower than 15 fps is skipped when a smoother one exists, so a still-size listing cannot outrank the video mode. Preview preserves the whole frame.
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
