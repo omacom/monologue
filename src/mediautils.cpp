@@ -21,6 +21,11 @@ int media::bestFormat(const QList<Format> &formats) {
         const qint64 area = qint64(f.size.width()) * f.size.height();
         const qint64 bestArea = qint64(b.size.width()) * b.size.height();
         const double rate = targetFps(f.minFps, f.maxFps), bestRate = targetFps(b.minFps, b.maxFps);
+        // Largest resolution wins, but only among formats that sustain a usable
+        // frame rate: uncompressed modes at sensor maximum often run at 2 fps.
+        constexpr double usableFps = 15;
+        const double usable = std::min(rate, usableFps), bestUsable = std::min(bestRate, usableFps);
+        if (usable != bestUsable) { if (usable > bestUsable) best = i; continue; }
         if (area > bestArea || (area == bestArea &&
             (std::abs(rate - 30) < std::abs(bestRate - 30) ||
              (std::abs(rate - 30) == std::abs(bestRate - 30) &&

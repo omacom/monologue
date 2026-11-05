@@ -41,6 +41,9 @@ private slots:
         f.append({{3840,2160},30,30,0}); QCOMPARE(media::bestFormat(f),3);
         f.append({{3840,2160},30,60,0}); QCOMPARE(media::bestFormat(f),3);
         QCOMPARE(media::bestFormat({}),-1);
+        // Logitech C925e: YUYV at sensor maximum only manages 2 fps.
+        QList<media::Format> c{{{2304,1536},2,2,1}, {{1920,1080},5,30,2}, {{1920,1080},5,5,1}, {{640,480},5,30,1}};
+        QCOMPARE(media::bestFormat(c),1);
         QCOMPARE(media::targetFps(15,15),15.0);
     }
     void clockExcludesPauses() {
