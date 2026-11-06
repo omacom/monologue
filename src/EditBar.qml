@@ -74,6 +74,7 @@ Item {
                     x: Math.round(index * slot); width: Math.round((index + 1) * slot) - x; height: track.height
                     sourceSize.height: track.height
                     fillMode: Image.PreserveAspectCrop
+                    mirror: backend.takeMirrored
                     asynchronous: true; cache: false
                     source: index < backend.thumbnails.ready ? "image://thumbs/" + backend.thumbnails.revision + "/" + index : ""
                 }

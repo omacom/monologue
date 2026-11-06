@@ -45,6 +45,10 @@ class Backend : public QObject {
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY editChanged)
     // The finished take has not been saved as it is now edited.
     Q_PROPERTY(bool unsaved READ unsaved NOTIFY editChanged)
+    // Mirror the picture. New takes record this choice and are flipped when saved.
+    Q_PROPERTY(bool mirrorPreview READ mirrorPreview WRITE setMirrorPreview NOTIFY mirrorPreviewChanged)
+    // The take was recorded with a mirrored preview, so it plays and saves mirrored to match.
+    Q_PROPERTY(bool takeMirrored READ takeMirrored NOTIFY changed)
     Q_PROPERTY(QObject *thumbnails READ thumbnails CONSTANT)
 public:
     explicit Backend(QObject *parent = nullptr);
@@ -74,6 +78,9 @@ public:
     bool canUndo() const { return !m_undo.isEmpty(); }
     bool canRedo() const { return !m_redo.isEmpty(); }
     bool unsaved() const;
+    bool mirrorPreview() const { return m_mirrorPreview; }
+    void setMirrorPreview(bool mirror);
+    bool takeMirrored() const { return m_takeMirrored; }
     Thumbnails *thumbnails() { return &m_thumbnails; }
     edit::Clips currentEdit() const { return m_edit; }
     Q_INVOKABLE void setPreview(QObject *sink);
@@ -104,6 +111,7 @@ signals:
     void devicesChanged();
     void meterChanged();
     void editChanged();
+    void mirrorPreviewChanged();
     void safeToClose();
     void overwriteRequested(const QString &path);
 private:
@@ -170,5 +178,6 @@ private:
     qint64 m_clipUntil = 0, m_peakUntil = 0, m_signalAt = 0;
     double m_duration = 0, m_level = -60, m_peak = -60, m_pendingPeak = 0, m_fps = 30;
     bool m_cameraHealthy = false, m_audioHealthy = false, m_dialogOpen = false;
+    bool m_mirrorPreview = false, m_takeMirrored = false;
     bool m_hasSaved = false, m_discardAfter = false, m_restartAfter = false, m_probing = false;
 };

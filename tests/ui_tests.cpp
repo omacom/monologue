@@ -3,6 +3,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
+#include <QQmlListReference>
 #include <QQuickWindow>
 #include <QQuickItem>
 #include <QQuickStyle>
@@ -47,6 +48,8 @@ QtObject {
     property bool canUndo: false
     property bool canRedo: false
     property bool unsaved: true
+    property bool mirrorPreview: false
+    property bool takeMirrored: false
     property int newRecordings: 0
     property QtObject thumbnails: QtObject {
         property int count: 12
@@ -96,7 +99,24 @@ QtObject {
         engine.load(QUrl("qrc:/Main.qml")); QVERIFY(!engine.rootObjects().isEmpty());
         auto *window=qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
         QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate(); QTest::qWait(100);
+        // Mirror flips only the live preview, by key or button, and is off by default.
+        auto *live=window->findChild<QQuickItem*>("liveVideo"); QVERIFY(live);
+        auto *mirror=window->findChild<QQuickItem*>("mirrorButton"); QVERIFY(mirror);
+        const auto liveScale=[&] { QQmlListReference t(live,"transform"); return t.count()==1 ? t.at(0)->property("xScale").toDouble() : 0.0; };
+        QVERIFY(mirror->isVisible()); QVERIFY(!mirror->property("checked").toBool()); QCOMPARE(liveScale(),1.0);
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(backend->property("mirrorPreview").toBool());
+        QVERIFY(mirror->property("checked").toBool()); QCOMPARE(liveScale(),-1.0);
+        window->grabWindow().save("/tmp/monologue-ui-mirrored.png");
+        const auto mirrorAt=mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint();
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirrorAt);
+        QVERIFY(!backend->property("mirrorPreview").toBool()); QCOMPARE(liveScale(),1.0);
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirrorAt);
+        QVERIFY(backend->property("mirrorPreview").toBool());
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(!backend->property("mirrorPreview").toBool());
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
+        // A take keeps the mirroring it started with.
+        QVERIFY(!mirror->isEnabled());
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(!backend->property("mirrorPreview").toBool());
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("paused"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         QKeyEvent repeat(QEvent::KeyPress,Qt::Key_Space,Qt::NoModifier," ",true); QCoreApplication::sendEvent(window,&repeat);
@@ -137,6 +157,14 @@ QtObject {
         QTest::keyClick(window,Qt::Key_Space);
         QCOMPARE(backend->property("state").toString(),QString("recording"));
         QTest::keyClick(window,Qt::Key_Return); QCOMPARE(backend->property("state").toString(),QString("finished"));
+        // The editor plays the take as it will be saved; mirroring is decided before recording.
+        QVERIFY(!mirror->isVisible());
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(!backend->property("mirrorPreview").toBool());
+        auto *clipVideo=window->findChild<QQuickItem*>("clipVideo"); QVERIFY(clipVideo);
+        const auto clipScale=[&] { QQmlListReference t(clipVideo,"transform"); return t.count()==1 ? t.at(0)->property("xScale").toDouble() : 0.0; };
+        QCOMPARE(clipScale(),1.0);
+        backend->setProperty("takeMirrored",true); QCOMPARE(clipScale(),-1.0);
+        backend->setProperty("takeMirrored",false);
         // Split at 10 and 20 s, remove the middle clip, restore the gap with X, then trim to the playhead.
         auto *bar=window->findChild<QQuickItem*>("editBar"); QVERIFY(bar);
         auto clips=[&] { return backend->property("clips").toList(); };
@@ -204,7 +232,6 @@ QtObject {
         const auto red=themeDir.filePath("red.mp4");
         QProcess encode; encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240:d=1","-c:v","libx264","-pix_fmt","yuv420p",red});
         QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
-        auto *clipVideo=window->findChild<QObject*>("clipVideo"); QVERIFY(clipVideo);
         auto *sink=clipVideo->property("videoSink").value<QVideoSink*>(); QVERIFY(sink);
         // Reaching the end of the file must not clear the picture to black.
         QCOMPARE(clipVideo->property("endOfStreamPolicy").toInt(),1);

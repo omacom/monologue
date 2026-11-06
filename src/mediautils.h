@@ -18,6 +18,7 @@ QString normalizeMp4(const QString &path, double fps);
 struct Probe { bool ok = false; QString error; QSize size; double duration = 0; bool audio = false; };
 Probe probe(const QString &path);
 // Re-encodes the kept ranges of a recording into one MP4, reporting progress on stdout.
-QStringList exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio);
+// mirror flips the picture horizontally, for takes recorded with a mirrored preview.
+QStringList exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio, bool mirror = false);
 QImage thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel);
 }

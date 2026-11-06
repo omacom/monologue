@@ -34,10 +34,11 @@ To build and install the Arch package:
 | Space | Record / pause / resume; play / pause while editing |
 | Enter or Ctrl+Enter | Stop the take and edit it |
 | Esc | Confirm discarding the clip and start over |
+| M | Mirror the picture |
 | Q | Quit (asks first if the take is still recording or unsaved) |
 | ? | Keyboard help |
 
-The shutter button records and stops; the round button beside it pauses and resumes.
+The shutter button records and stops; the round button beside it pauses and resumes. **Mirror** flips the picture so it moves like a mirror. A take keeps the choice it started with: it plays mirrored in the editor and saves mirrored, so what you save matches what you saw. Saving a mirrored take always re-encodes it.
 
 While editing, the timeline shows your take as one or more clips, each framed with a handle at both ends. Whatever falls outside every clip is cut.
 
@@ -61,11 +62,11 @@ Handles catch on pause marks, neighbouring clips, and the playhead. Playback pla
 
 ## Storage and settings
 
-Takes are recorded into the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`, one folder per take. Saving an unedited clip copies the original without re-encoding; an edited clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden temporary file beside the destination, then renamed into place. Saving into Monologue's own recordings folder is refused.
+Takes are recorded into the application's XDG data directory, normally `~/.local/share/omacom/monologue/recordings/`, one folder per take. Saving an unedited clip copies the original without re-encoding; an edited or mirrored clip is re-encoded from its clips (H.264 CRF 18, AAC) into a hidden temporary file beside the destination, then renamed into place. Saving into Monologue's own recordings folder is refused.
 
 A take lives only as long as you're working on it: starting a new recording or quitting deletes it. If you haven't saved it since your last change, Monologue asks first, and offers to save. If Monologue is killed or crashes with a take open, the next launch reopens that take in the editor if it was last written less than an hour ago (its edits and pause marks are not kept); an older one is deleted. A take that can't be played back is deleted. Each take holds a lock while in use, so a second Monologue window never mistakes it for an interrupted one.
 
-Device IDs and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
+Device IDs, the mirror choice, and the last save directory live in the application's Qt settings, normally `~/.config/omacom/monologue.conf`. The theme is read from `~/.local/state/omarchy/current/theme/colors.toml`, as in Omacut. No Omarchy config is changed.
 
 A disconnected source or encoder error stops the take and preserves its files. An unfinalized MP4 after a crash or power loss may not be playable. Maximum resolution is never silently reduced: if the device or encoder cannot sustain it, Monologue reports the problem.
 

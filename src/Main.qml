@@ -150,6 +150,7 @@ ApplicationWindow {
     Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
     Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
+    Shortcut { sequence: "M"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.finished && !win.busy && !win.overlayOpen && !backend.takeActive && !cameraChoice.popup.visible && !microphoneChoice.popup.visible; onActivated: backend.mirrorPreview = !backend.mirrorPreview }
     Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
     Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
@@ -162,6 +163,7 @@ ApplicationWindow {
         microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
         chevron: "M6 9l6 6 6-6",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
+        mirror: "M12 3v18 M9 7L4 17h5z M15 7l5 10h-5z",
         play: "M8 4.5v15l12.5-7.5z",
         pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z"
     })
@@ -195,7 +197,7 @@ ApplicationWindow {
         font.pixelSize: 13; font.weight: Font.DemiBold
         focusPolicy: Qt.TabFocus
         implicitHeight: 42
-        readonly property color foreground: button.progress >= 0 ? win.textColor : button.primary ? win.accentForeground : button.flat && !button.hovered ? win.dimColor : win.textColor
+        readonly property color foreground: button.progress >= 0 ? win.textColor : button.primary ? win.accentForeground : button.checked ? win.accent : button.flat && !button.hovered ? win.dimColor : win.textColor
         contentItem: Item {
             implicitWidth: label.implicitWidth; implicitHeight: label.implicitHeight
             Row {
@@ -330,9 +332,19 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
-            VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
+            // Mirroring flips the picture on screen; the recording keeps the camera's own orientation until it's saved.
+            VideoOutput {
+                id: liveVideo; objectName: "liveVideo"
+                anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true
+                transform: Scale { origin.x: liveVideo.width / 2; xScale: backend.mirrorPreview ? -1 : 1 }
+            }
             // Hold the last frame at the end of the file rather than clearing to black.
-            VideoOutput { id: clipVideo; objectName: "clipVideo"; endOfStreamPolicy: VideoOutput.KeepLastFrame; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
+            VideoOutput {
+                id: clipVideo; objectName: "clipVideo"; endOfStreamPolicy: VideoOutput.KeepLastFrame
+                anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit
+                // A take recorded mirrored plays mirrored, as it will be saved.
+                transform: Scale { origin.x: clipVideo.width / 2; xScale: backend.takeMirrored ? -1 : 1 }
+            }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
             Column {
                 anchors.centerIn: parent; width: Math.min(400, parent.width-40); spacing: 16
@@ -488,6 +500,16 @@ ApplicationWindow {
                 Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
                 Item { Layout.fillWidth: true }
                 ActionButton {
+                    objectName: "mirrorButton"
+                    visible: !win.finished; flat: true; checkable: true
+                    iconPath: win.icons.mirror; text: "Mirror"
+                    checked: backend.mirrorPreview
+                    enabled: !win.busy && !backend.dialogOpen && !backend.takeActive
+                    Accessible.name: "Mirror"
+                    ToolTip.visible: hovered; ToolTip.text: (backend.mirrorPreview ? "Stop mirroring" : "Mirror") + " the picture (M). Takes save as you see them."
+                    onToggled: { backend.mirrorPreview = checked; liveVideo.forceActiveFocus() }
+                }
+                ActionButton {
                     objectName: "saveButton"
                     readonly property bool saving: backend.state === "saving"
                     visible: win.finished; primary: true
@@ -598,7 +620,7 @@ ApplicationWindow {
             spacing: 40
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: "Recording"
-                rows: [["Space", "Record / pause / resume"], ["Enter", "Stop and edit"], ["Esc", "Discard and start over"], ["Q", "Quit"], ["?", "Show shortcuts"]]
+                rows: [["Space", "Record / pause / resume"], ["Enter", "Stop and edit"], ["Esc", "Discard and start over"], ["M", "Mirror the picture"], ["Q", "Quit"], ["?", "Show shortcuts"]]
             }
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: "Editing"

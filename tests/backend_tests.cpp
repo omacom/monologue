@@ -75,6 +75,7 @@ private slots:
         QVERIFY(args.contains("[0:v:0][0:a:0][1:v:0][1:a:0]concat=n=2:v=1:a=1[v][a]"));
         QCOMPARE(args.count("-i"),2);
         QVERIFY(media::exportArgs("in.mp4","out.mp4",{{0,2}},false).contains("[0:v:0]concat=n=1:v=1:a=0[v]"));
+        QVERIFY(media::exportArgs("in.mp4","out.mp4",{{0,2}},true,true).contains("[0:v:0][0:a:0]concat=n=1:v=1:a=1[joined][a];[joined]hflip[v]"));
     }
     void meterAllChannels() {
         QAudioFormat f; f.setSampleRate(48000); f.setChannelCount(2); f.setSampleFormat(QAudioFormat::Int16);
@@ -178,6 +179,50 @@ private slots:
             QVERIFY(media::peak(bytes.mid(16000*2,4800*2),a)>.1);
             QVERIFY(QFile::copy(directory.filePath("take.mp4"),fixture.filePath("fixture.mp4")));
         }
+    }
+    void mirrorPreviewIsRemembered() {
+        {
+            Backend backend(new FakePicker,false);
+            QVERIFY(!backend.mirrorPreview());
+            QSignalSpy changed(&backend,&Backend::mirrorPreviewChanged);
+            backend.setMirrorPreview(true); backend.setMirrorPreview(true);
+            QVERIFY(backend.mirrorPreview()); QCOMPARE(changed.count(),1);
+        }
+        {
+            Backend backend(new FakePicker,false);
+            QVERIFY(backend.mirrorPreview());
+            backend.setMirrorPreview(false);
+        }
+        Backend backend(new FakePicker,false);
+        QVERIFY(!backend.mirrorPreview());
+    }
+    void mirroredTakeSavesMirrored() {
+        // Red on the left, blue on the right; a mirrored take saves blue on the left.
+        QTemporaryDir source;
+        QProcess encode;
+        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=64x64:r=30:d=1","-f","lavfi","-i","color=blue:s=64x64:r=30:d=1",
+                               "-filter_complex","[0][1]hstack","-c:v","libx264","-pix_fmt","yuv420p",source.filePath("split.mp4")});
+        QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
+        const auto directory=leaveTake("00000000-0000-0000-0000-000000000008",source.filePath("split.mp4"));
+        QVERIFY(!directory.isEmpty());
+        { QFile marker(directory+"/.mirrored"); QVERIFY(marker.open(QIODevice::WriteOnly)); }
+        auto *picker=new FakePicker;
+        Backend backend(picker,false);
+        QTRY_COMPARE(backend.state(),QString("finished"));
+        QVERIFY(backend.takeMirrored());
+        const auto saved=source.filePath("mirrored.mp4");
+        backend.save(); picker->choose(QUrl::fromLocalFile(saved));
+        // Even unedited, it is re-encoded rather than copied.
+        QCOMPARE(backend.state(),QString("saving"));
+        QTRY_COMPARE_WITH_TIMEOUT(backend.state(),QString("finished"),30000);
+        QVERIFY2(backend.message().startsWith("Saved to"),qPrintable(backend.message()));
+        const auto frame=media::thumbnail(saved,0.5,64,nullptr);
+        QVERIFY(!frame.isNull());
+        const auto left=frame.pixelColor(8,32), right=frame.pixelColor(frame.width()-8,32);
+        QVERIFY2(left.blue()>180 && left.red()<80,qPrintable(left.name()));
+        QVERIFY2(right.red()>180 && right.blue()<80,qPrintable(right.name()));
+        backend.newRecording();
+        QVERIFY(!backend.takeMirrored()); QVERIFY(!QDir(directory).exists());
     }
     void recoveryAndSave() {
         const auto directory=leaveTake("00000000-0000-0000-0000-000000000001",fixture.filePath("fixture.mp4"));

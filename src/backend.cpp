@@ -27,6 +27,7 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recordings";
     m_cameraId=m_settings.value("camera/id").toString();
     m_audioId=m_settings.value("microphone/id").toString();
+    m_mirrorPreview=m_settings.value("preview/mirror",false).toBool();
     m_capture.setVideoSink(&m_sink);
     connect(&m_sink,&QVideoSink::videoFrameChanged,this,&Backend::receiveVideo);
     if(m_activateHardware) {
@@ -52,6 +53,13 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
 Backend::~Backend() {
     releaseSources();
     if(m_export) { m_export->disconnect(this); m_export->kill(); m_export->waitForFinished(); QFile::remove(m_exportPartial); }
+}
+void Backend::setMirrorPreview(bool mirror) {
+    // A take keeps the choice it started with; it decides how the take saves.
+    if(mirror==m_mirrorPreview || m_writer) return;
+    m_mirrorPreview=mirror;
+    m_settings.setValue("preview/mirror",mirror);
+    emit mirrorPreviewChanged();
 }
 int Backend::cameraIndex() const { return indexOf(m_cameras,m_cameraId); }
 int Backend::microphoneIndex() const { return indexOf(m_microphones,m_audioId); }
@@ -250,6 +258,10 @@ void Backend::startTake() {
     m_clipFileName="Monologue-"+QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss")+".mp4";
     m_clipPath=directory+"/"+m_clipFileName;
     m_interruption.clear(); m_duration=0;
+    // Remembered beside the take, so a recovered take still saves the way it was framed.
+    m_takeMirrored=m_mirrorPreview;
+    // Without the marker the take still records and saves mirrored; only recovering it after a crash would not.
+    if(m_takeMirrored && !QFile(directory+"/.mirrored").open(QIODevice::WriteOnly)) qWarning("Could not mark the take as mirrored.");
     readAudio();
     m_writer=new Writer(this);
     connect(m_writer,&Writer::finished,this,&Backend::writerFinished,Qt::QueuedConnection);
@@ -362,7 +374,8 @@ void Backend::writeTo(const QString &destination) {
     if(!takes.isEmpty() && (folder==takes || folder.startsWith(takes+"/"))) {
         m_message="Could not save: choose a folder outside Monologue's working files."; emit changed(); return;
     }
-    if(edit::untouched(m_edit,m_duration)) copyTo(destination);
+    // A mirrored take is flipped on the way out, so it can't be copied as recorded.
+    if(edit::untouched(m_edit,m_duration) && !m_takeMirrored) copyTo(destination);
     else exportTo(destination);
 }
 void Backend::copyTo(const QString &destination) {
@@ -412,7 +425,7 @@ void Backend::exportTo(const QString &destination) {
         m_export->deleteLater(); m_export=nullptr;
         saved(destination,"ffmpeg could not be started.");
     });
-    m_export->start("ffmpeg",media::exportArgs(m_clipPath,m_exportPartial,edit::kept(m_edit),m_clipAudio));
+    m_export->start("ffmpeg",media::exportArgs(m_clipPath,m_exportPartial,edit::kept(m_edit),m_clipAudio,m_takeMirrored));
 }
 void Backend::saved(const QString &destination,const QString &error) {
     if(!error.isEmpty() && !m_exportPartial.isEmpty()) QFile::remove(m_exportPartial);
@@ -517,7 +530,7 @@ void Backend::deleteTake() {
         m_takeLock.reset();
         QDir(m_root+"/"+m_takeId).removeRecursively();
     }
-    m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear();
+    m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear(); m_takeMirrored=false;
     resetEdit({},{}); m_thumbnails.clear();
 }
 void Backend::recoverTake() {
@@ -528,6 +541,7 @@ void Backend::recoverTake() {
         for(const auto &name:QDir(entry.filePath()).entryList({"*.mp4"},QDir::Files))
             if(!name.endsWith(".finalizing.mp4")) clip=name;
         m_takeId=entry.fileName();
+        m_takeMirrored=QFile::exists(entry.filePath()+"/.mirrored");
         // Only a recent take is worth reopening; anything older is just left over.
         const QFileInfo file(entry.filePath()+"/"+clip);
         if(clip.isEmpty() || file.lastModified().secsTo(QDateTime::currentDateTime())>=3600) { deleteTake(); continue; }
