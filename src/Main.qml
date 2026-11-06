@@ -501,13 +501,14 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 ActionButton {
                     objectName: "mirrorButton"
-                    visible: !win.finished; flat: true; checkable: true
+                    visible: !win.finished; flat: true
                     iconPath: win.icons.mirror; text: "Mirror"
                     checked: backend.mirrorPreview
                     enabled: !win.busy && !backend.dialogOpen && !backend.takeActive
                     Accessible.name: "Mirror"
                     ToolTip.visible: hovered; ToolTip.text: (backend.mirrorPreview ? "Stop mirroring" : "Mirror") + " the picture (M). Takes save as you see them."
-                    onToggled: { backend.mirrorPreview = checked; liveVideo.forceActiveFocus() }
+                    // Clicked, not toggled: ActionButton's Return/Enter handling emits clicked().
+                    onClicked: { backend.mirrorPreview = !backend.mirrorPreview; liveVideo.forceActiveFocus() }
                 }
                 ActionButton {
                     objectName: "saveButton"

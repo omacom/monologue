@@ -113,6 +113,13 @@ QtObject {
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirrorAt);
         QVERIFY(backend->property("mirrorPreview").toBool());
         QTest::keyClick(window,Qt::Key_M); QVERIFY(!backend->property("mirrorPreview").toBool());
+        // With focus on the button, Return and Enter toggle it like a click.
+        mirror->forceActiveFocus(); QVERIFY(mirror->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Return); QVERIFY(backend->property("mirrorPreview").toBool());
+        QVERIFY(mirror->property("checked").toBool()); QCOMPARE(liveScale(),-1.0);
+        mirror->forceActiveFocus(); QTest::keyClick(window,Qt::Key_Enter); QVERIFY(!backend->property("mirrorPreview").toBool());
+        QVERIFY(!mirror->property("checked").toBool()); QCOMPARE(liveScale(),1.0);
+        QTRY_VERIFY(live->hasActiveFocus());
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         // A take keeps the mirroring it started with.
         QVERIFY(!mirror->isEnabled());
