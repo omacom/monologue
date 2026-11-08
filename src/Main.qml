@@ -369,7 +369,7 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
-            VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
+            VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true; mirrored: backend.mirror }
             // Hold the last frame at the end of the file rather than clearing to black.
             VideoOutput { id: clipVideo; objectName: "clipVideo"; endOfStreamPolicy: VideoOutput.KeepLastFrame; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
@@ -527,6 +527,17 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
                 Item { Layout.fillWidth: true }
+                ActionButton {
+                    objectName: "mirrorButton"
+                    text: backend.mirror ? "Mirror: on" : "Mirror: off"
+                    onClicked: backend.setMirror(!backend.mirror)
+                    visible: !win.finished
+                    enabled: !win.busy
+                    flat: true
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Flip the live preview horizontally"
+                    Accessible.name: backend.mirror ? "Mirror preview on" : "Mirror preview off"
+                }
                 ActionButton {
                     objectName: "saveButton"
                     readonly property bool saving: backend.state === "saving"

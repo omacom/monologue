@@ -39,6 +39,7 @@ QtObject {
     property real peakLevel: -6
     property bool clipping: false
     property string meterText: "−9 dBFS"
+    property bool mirror: false
     property url clip: ""
     property string clipName: "Monologue-2026-09-17.mp4"
     property real saveProgress: 0
@@ -63,6 +64,7 @@ QtObject {
     function setPreview(sink) {}
     function toggleRecording() { toggles++; state = state === "ready" || state === "paused" ? "recording" : "paused"; changed() }
     function finish() { state = "finished"; changed() }
+    function setMirror(value) { mirror = value; changed() }
     function selectCamera(i) {}
     function selectMicrophone(i) {}
     function newRecording() { newRecordings++; state = "ready"; changed() }
