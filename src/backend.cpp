@@ -27,6 +27,7 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_root = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/recordings";
     m_cameraId=m_settings.value("camera/id").toString();
     m_audioId=m_settings.value("microphone/id").toString();
+m_mirror=m_settings.value("mirror", false).toBool();
     m_capture.setVideoSink(&m_sink);
     connect(&m_sink,&QVideoSink::videoFrameChanged,this,&Backend::receiveVideo);
     if(m_activateHardware) {
@@ -229,6 +230,12 @@ void Backend::selectCamera(int index) {
 void Backend::selectMicrophone(int index) {
     if(m_writer || index<0 || index>=m_microphones.size() || m_state=="saving" || m_probing) return;
     m_audioId=m_microphones[index].toMap()["id"].toString(); activateSources();
+}
+void Backend::setMirror(bool value) {
+    if (m_mirror == value) return;
+    m_mirror = value;
+    m_settings.setValue("mirror", value);
+    emit mirrorChanged();
 }
 void Backend::retry() { if(!m_writer && m_state!="finished") activateSources(); }
 void Backend::toggleRecording() {

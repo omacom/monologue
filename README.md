@@ -6,6 +6,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 - Automatically selects the camera's maximum advertised video resolution, preferring 30 fps at that resolution. Preview preserves the whole frame.
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
+- Mirror preview toggle: flip the live preview horizontally (recording stays unmirrored so text reads correctly). Persisted in settings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
 - Built-in editing: split the take into clips on an Omacut-style filmstrip, trim each clip with its handles, see where you paused, and undo. Edits never touch the original.
 - H.264 MP4 with AAC audio, retained originals, and atomic Save.
