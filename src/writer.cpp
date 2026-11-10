@@ -1,36 +1,8 @@
 #include "writer.h"
 #include <QMediaFormat>
 #include <QUrl>
-#include <QAbstractVideoBuffer>
+#include "mediautils.h"
 #include <limits>
-
-namespace {
-// QVideoFrame copies share timestamp metadata as well as pixels. Give recording
-// frames independent metadata without copying their image planes or altering
-// the live preview (or an already queued copy of a pause's final frame).
-class FrameBuffer : public QAbstractVideoBuffer {
-public:
-    explicit FrameBuffer(const QVideoFrame &source) : m_source(source) {}
-    ~FrameBuffer() override { unmap(); }
-    QVideoFrameFormat format() const override { return m_source.surfaceFormat(); }
-    MapData map(QVideoFrame::MapMode mode) override {
-        MapData result;
-        if(!m_source.map(mode)) return result;
-        m_mapped=true;
-        result.planeCount=m_source.planeCount();
-        for(int i=0;i<result.planeCount;++i) {
-            result.data[i]=m_source.bits(i);
-            result.bytesPerLine[i]=m_source.bytesPerLine(i);
-            result.dataSize[i]=m_source.mappedBytes(i);
-        }
-        return result;
-    }
-    void unmap() override { if(m_mapped) { m_source.unmap(); m_mapped=false; } }
-private:
-    QVideoFrame m_source;
-    bool m_mapped=false;
-};
-}
 
 void TakeClock::start(qint64 now) {
     m_start = now; m_completed = 0; m_paused = false;
@@ -138,7 +110,8 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     const qint64 timestamp = qRound64(frameIndex * 1000000.0 / m_fps);
     if (timestamp <= m_lastVideo) return;
     m_tailFrame = frame;
-    frame = QVideoFrame(std::make_unique<FrameBuffer>(frame));
+    // Independent timestamps for the recording copy, without touching the preview's frame.
+    frame = media::withFormat(frame, frame.surfaceFormat());
     frame.setStartTime(timestamp);
     frame.setEndTime(qRound64((frameIndex + 1) * 1000000.0 / m_fps));
     frame.setStreamFrameRate(m_fps);

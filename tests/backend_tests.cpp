@@ -1,3 +1,4 @@
+#include <linux/videodev2.h>
 #include <QtTest>
 #include <cstring>
 #include <QTemporaryDir>
@@ -42,6 +43,18 @@ private slots:
         f.append({{3840,2160},30,60,0}); QCOMPARE(media::bestFormat(f),3);
         QCOMPARE(media::bestFormat({}),-1);
         QCOMPARE(media::targetFps(15,15),15.0);
+    }
+    void cameraColorSpace() {
+        // Cam Link 4K: sRGB colorspace, explicit BT.709 encoding.
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_SRGB,V4L2_YCBCR_ENC_709),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_SRGB,V4L2_YCBCR_ENC_DEFAULT),QVideoFrameFormat::ColorSpace_BT601);
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_REC709,V4L2_YCBCR_ENC_DEFAULT),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(media::cameraColorSpace("/nonexistent"),QVideoFrameFormat::ColorSpace_Undefined);
+        QImage image(4,4,QImage::Format_RGB32);
+        auto format=QVideoFrame(image).surfaceFormat(); format.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
+        const auto frame=media::withFormat(QVideoFrame(image),format);
+        QCOMPARE(frame.surfaceFormat().colorSpace(),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(frame.toImage().size(),QSize(4,4));
     }
     void clockExcludesPauses() {
         TakeClock c; c.start(1000000);

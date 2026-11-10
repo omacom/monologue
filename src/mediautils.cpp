@@ -9,6 +9,59 @@
 #include <cstring>
 #include <limits>
 #include <cstdio>
+#include <QAbstractVideoBuffer>
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+#include <linux/videodev2.h>
+
+namespace {
+class FrameBuffer : public QAbstractVideoBuffer {
+public:
+    FrameBuffer(const QVideoFrame &source, const QVideoFrameFormat &format) : m_source(source), m_format(format) {}
+    ~FrameBuffer() override { unmap(); }
+    QVideoFrameFormat format() const override { return m_format; }
+    MapData map(QVideoFrame::MapMode mode) override {
+        MapData result;
+        if(!m_source.map(mode)) return result;
+        m_mapped=true;
+        result.planeCount=m_source.planeCount();
+        for(int i=0;i<result.planeCount;++i) {
+            result.data[i]=m_source.bits(i);
+            result.bytesPerLine[i]=m_source.bytesPerLine(i);
+            result.dataSize[i]=m_source.mappedBytes(i);
+        }
+        return result;
+    }
+    void unmap() override { if(m_mapped) { m_source.unmap(); m_mapped=false; } }
+private:
+    QVideoFrame m_source;
+    QVideoFrameFormat m_format;
+    bool m_mapped=false;
+};
+}
+
+QVideoFrame media::withFormat(const QVideoFrame &source, const QVideoFrameFormat &format) {
+    return QVideoFrame(std::make_unique<FrameBuffer>(source, format));
+}
+QVideoFrameFormat::ColorSpace media::colorSpace(int v4l2Colorspace, int v4l2Encoding) {
+    if (v4l2Encoding == V4L2_YCBCR_ENC_DEFAULT) v4l2Encoding = V4L2_MAP_YCBCR_ENC_DEFAULT(v4l2Colorspace);
+    switch (v4l2Encoding) {
+    case V4L2_YCBCR_ENC_601: case V4L2_YCBCR_ENC_XV601: return QVideoFrameFormat::ColorSpace_BT601;
+    case V4L2_YCBCR_ENC_709: case V4L2_YCBCR_ENC_XV709: return QVideoFrameFormat::ColorSpace_BT709;
+    case V4L2_YCBCR_ENC_BT2020: case V4L2_YCBCR_ENC_BT2020_CONST_LUM: return QVideoFrameFormat::ColorSpace_BT2020;
+    default: return QVideoFrameFormat::ColorSpace_Undefined;
+    }
+}
+QVideoFrameFormat::ColorSpace media::cameraColorSpace(const QByteArray &device) {
+    const int fd = ::open(device.constData(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return QVideoFrameFormat::ColorSpace_Undefined;
+    v4l2_format format{};
+    format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    const bool ok = ::ioctl(fd, VIDIOC_G_FMT, &format) == 0;
+    ::close(fd);
+    return ok ? colorSpace(format.fmt.pix.colorspace, format.fmt.pix.ycbcr_enc) : QVideoFrameFormat::ColorSpace_Undefined;
+}
 
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
