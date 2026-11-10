@@ -52,8 +52,10 @@ private slots:
         QCOMPARE(media::cameraColorSpace("/nonexistent"),QVideoFrameFormat::ColorSpace_Undefined);
         QImage image(4,4,QImage::Format_RGB32);
         auto format=QVideoFrame(image).surfaceFormat(); format.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
-        const auto frame=media::withFormat(QVideoFrame(image),format);
+        QVideoFrame source(image); source.setStartTime(1234); source.setEndTime(5678);
+        const auto frame=media::withFormat(source,format);
         QCOMPARE(frame.surfaceFormat().colorSpace(),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(frame.startTime(),1234); QCOMPARE(frame.endTime(),5678);
         QCOMPARE(frame.toImage().size(),QSize(4,4));
     }
     void clockExcludesPauses() {

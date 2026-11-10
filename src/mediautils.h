@@ -16,7 +16,7 @@ QCameraFormat bestCameraFormat(const QCameraDevice &device);
 QVideoFrameFormat::ColorSpace colorSpace(int v4l2Colorspace, int v4l2Encoding);
 // Asks the V4L2 device (e.g. "/dev/video4") which YCbCr encoding it is delivering.
 QVideoFrameFormat::ColorSpace cameraColorSpace(const QByteArray &device);
-// Shares the source's image planes under a new format, with independent frame metadata.
+// Shares the source's image planes and capture times under a new format; later metadata changes stay independent.
 QVideoFrame withFormat(const QVideoFrame &source, const QVideoFrameFormat &format);
 double targetFps(double minimum, double maximum);
 double peak(const QByteArray &data, const QAudioFormat &format);

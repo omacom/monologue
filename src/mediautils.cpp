@@ -42,7 +42,10 @@ private:
 }
 
 QVideoFrame media::withFormat(const QVideoFrame &source, const QVideoFrameFormat &format) {
-    return QVideoFrame(std::make_unique<FrameBuffer>(source, format));
+    QVideoFrame frame(std::make_unique<FrameBuffer>(source, format));
+    frame.setStartTime(source.startTime());
+    frame.setEndTime(source.endTime());
+    return frame;
 }
 QVideoFrameFormat::ColorSpace media::colorSpace(int v4l2Colorspace, int v4l2Encoding) {
     if (v4l2Encoding == V4L2_YCBCR_ENC_DEFAULT) v4l2Encoding = V4L2_MAP_YCBCR_ENC_DEFAULT(v4l2Colorspace);
