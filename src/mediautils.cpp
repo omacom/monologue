@@ -9,6 +9,7 @@
 #include <cstring>
 #include <limits>
 #include <cstdio>
+#include <sys/stat.h>
 
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
@@ -66,6 +67,26 @@ QString media::copyAtomically(const QString &source, const QString &destination)
         if (output.write(block) != block.size()) return output.errorString();
     }
     if (!output.commit()) return output.errorString();
+    return {};
+}
+namespace {
+// umask() can only be read by setting it, which races other threads, so ask the kernel.
+mode_t currentUmask() {
+    QFile status("/proc/self/status");
+    if (status.open(QIODevice::ReadOnly))
+        for (const auto &line : status.readAll().split('\n'))
+            if (line.startsWith("Umask:")) return mode_t(line.mid(6).trimmed().toUInt(nullptr, 8));
+    return 022;
+}
+}
+QString media::moveIntoPlace(const QString &partial, const QString &destination) {
+    // QTemporaryFile reserves partials as 0600. Give the result what QSaveFile
+    // gives an unedited save: the replaced file's mode, or the umask's default.
+    const auto from = QFile::encodeName(partial), to = QFile::encodeName(destination);
+    struct stat existing;
+    const mode_t mode = ::stat(to.constData(), &existing) == 0 ? existing.st_mode & 07777 : 0666 & ~currentUmask();
+    if (::chmod(from.constData(), mode) != 0 || std::rename(from.constData(), to.constData()) != 0)
+        return "Could not move the finished MP4 into place.";
     return {};
 }
 QString media::normalizeMp4(const QString &path, double fps) {

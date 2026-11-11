@@ -90,6 +90,13 @@ private slots:
         QVERIFY(!media::copyAtomically(f.fileName(),dir.filePath("missing/copy.mp4")).isEmpty());
         QVERIFY(!media::copyAtomically(f.fileName(),f.fileName()).isEmpty());
         QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(),QByteArray("kept content"));
+        // An encoded partial lands with the permissions of any new file, or of the file it replaces.
+        auto partial=[&] { QTemporaryFile t(dir.filePath(".partial-XXXXXX.mp4")); t.setAutoRemove(false); return t.open() ? t.fileName() : QString(); };
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions(),QFileInfo(dir.filePath("copy with spaces.mp4")).permissions());
+        QVERIFY(QFile::setPermissions(dir.filePath("edited.mp4"),QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup));
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup);
     }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");
