@@ -120,6 +120,8 @@ private slots:
     }
     void translatorFollowsTheLanguageFile() {
         QTemporaryDir dir;
+        // A Translator sets the application's locale and direction; put them back however the test ends.
+        const auto restore=qScopeGuard([locale=QLocale(),direction=QGuiApplication::layoutDirection()] { QLocale::setDefault(locale); QGuiApplication::setLayoutDirection(direction); });
         auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
         Translator english(dir.filePath("language"),dir.path());
         QCOMPARE(english.language(),QString("en")); QVERIFY(english.translate("Backend","Save").isNull());
@@ -140,11 +142,11 @@ private slots:
         QVERIFY(QDir().mkpath(QFileInfo(later).absolutePath()));
         QVERIFY(write(later,"pt\n")); QTRY_COMPARE(fresh.language(),QString("pt"));
         QCOMPARE(fresh.translate("Backend","Retry"),QString("Tentar de novo"));
-        // A Translator sets the application's locale; the remaining tests expect the system's.
-        QLocale::setDefault(QLocale::system()); QGuiApplication::setLayoutDirection(Qt::LeftToRight);
     }
     void translatorPicksPluralFormsByCatalog() {
         QTemporaryDir dir;
+        // A Translator sets the application's locale and direction; put them back however the test ends.
+        const auto restore=qScopeGuard([locale=QLocale(),direction=QGuiApplication::layoutDirection()] { QLocale::setDefault(locale); QGuiApplication::setLayoutDirection(direction); });
         auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
         QVERIFY(write(dir.filePath("language"),"ru\n"));
         QVERIFY(write(dir.filePath("en.json"),R"({"%n clips": {"one": "%n clip", "other": "%n clips"}, "%n takes": {"one": "%n take", "other": "%n takes"}})"));
@@ -155,7 +157,6 @@ private slots:
         // A counted string Russian lacks falls back to English with English rules: 21 is "one" in Russian, plural in English.
         QCOMPARE(translator.translate("EditBar","%n takes",nullptr,21),QString("%n takes"));
         QCOMPARE(translator.translate("EditBar","%n takes",nullptr,1),QString("%n take"));
-        QLocale::setDefault(QLocale::system()); QGuiApplication::setLayoutDirection(Qt::LeftToRight);
     }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
     void realEncoding() {
