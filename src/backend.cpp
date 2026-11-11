@@ -68,6 +68,22 @@ void Backend::setPreview(QObject *sink) {
     if (m_preview && m_lastFrame.isValid()) m_preview->setVideoFrame(m_lastFrame);
 }
 void Backend::refreshDevices() {
+    const auto [cameraMissing,audioMissing]=listDevices();
+    if(m_writer) {
+        if(cameraMissing || audioMissing) sourceFailed(tr("A selected source was disconnected, so the take was stopped."));
+    } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
+        // Do not reopen healthy devices when an unrelated input is plugged in.
+        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
+    }
+}
+void Backend::retranslate() {
+    if(m_activateHardware) listDevices();
+    if(!m_formatLabel.isEmpty()) { m_formatLabel=describeFormat(); emit changed(); }
+}
+QString Backend::describeFormat() const {
+    return tr("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
+}
+std::pair<bool,bool> Backend::listDevices() {
     // Infrared sensors (for face login) appear as greyscale-only cameras; they can't record a usable take.
     QList<QCameraDevice> cameras;
     for(const auto &d:QMediaDevices::videoInputs()) {
@@ -97,12 +113,7 @@ void Backend::refreshDevices() {
     if(cameraMissing) m_cameras.prepend(QVariantMap{{"id",m_cameraId},{"label",tr("%1 — unavailable").arg(m_settings.value("camera/label",tr("Camera")).toString())}});
     if(audioMissing) m_microphones.prepend(QVariantMap{{"id",m_audioId},{"label",tr("%1 — unavailable").arg(m_settings.value("microphone/label",tr("Microphone")).toString())}});
     emit devicesChanged();
-    if(m_writer) {
-        if(cameraMissing || audioMissing) sourceFailed(tr("A selected source was disconnected, so the take was stopped."));
-    } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
-        // Do not reopen healthy devices when an unrelated input is plugged in.
-        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
-    }
+    return {cameraMissing,audioMissing};
 }
 void Backend::releaseSources(bool keepPicture) {
     if(m_camera) { m_camera->disconnect(this); m_camera->stop(); m_capture.setCamera(nullptr); delete m_camera; m_camera=nullptr; }
@@ -128,7 +139,7 @@ void Backend::activateSources() {
         if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message=tr("This camera advertises no supported video formats."); }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
-            m_formatLabel=tr("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
+            m_formatLabel=describeFormat();
             m_camera=new QCamera(selectedCamera,this);
             m_camera->setCameraFormat(m_cameraFormat);
             m_capture.setCamera(m_camera);

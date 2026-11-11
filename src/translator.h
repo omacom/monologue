@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QJsonValue>
 #include <QLocale>
+#include <QReadWriteLock>
 #include <QTimer>
 #include <QTranslator>
 
@@ -22,7 +23,7 @@ public:
                         QObject *parent = nullptr);
 
     QString language() const { return m_language; }
-    bool isEmpty() const override { return m_strings.isEmpty(); }
+    bool isEmpty() const override { QReadLocker lock(&m_lock); return m_strings.isEmpty(); }
     QString translate(const char *context, const char *sourceText, const char *disambiguation = nullptr,
                       int n = -1) const override;
 
@@ -40,6 +41,8 @@ private:
     QString m_catalogDirectory;
     QString m_language;
     QHash<QString, QJsonValue> m_strings;
+    // translate() runs on worker threads too (errors from QtConcurrent jobs), while reload() runs on the GUI thread.
+    mutable QReadWriteLock m_lock;
     QFileSystemWatcher m_watcher;
     QTimer m_debounce;
 };
