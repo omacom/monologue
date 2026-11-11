@@ -76,8 +76,9 @@ QtObject {
     function setClip(i, start, end) { var next = clips.slice(); next[i] = {start: start, end: end}; clips = next }
     function removeClip(i) { var next = clips.slice(); next.splice(i, 1); clips = next }
     function joinClips(i) { var next = clips.slice(); next[i] = {start: next[i].start, end: next[i + 1].end}; next.splice(i + 1, 1); clips = next }
-    function beginGesture() {}
-    function endGesture() {}
+    property int gestures: 0
+    function beginGesture() { gestures++ }
+    function endGesture() { gestures-- }
     function undo() { clips = [{start: 0, end: 84}]; canUndo = false }
     function redo() {}
     function retry() {}
@@ -172,6 +173,13 @@ QtObject {
         QTest::mouseMove(window,remove); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,remove);
         QTest::mouseMove(window,remove-QPoint(40,0)); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,remove-QPoint(40,0));
         QCOMPARE(clips().size(),2);
+        // A handle drag that loses its press, rather than being released, still ends the gesture.
+        const QPoint handle(xFor(0)+6,at60.y());
+        QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
+        QCOMPARE(backend->property("gestures").toInt(),1); QVERIFY(bar->property("interacting").toBool());
+        QVERIFY(window->mouseGrabberItem()); window->mouseGrabberItem()->ungrabMouse();
+        QCOMPARE(backend->property("gestures").toInt(),0); QVERIFY(!bar->property("interacting").toBool());
+        QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,handle);
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
         QCOMPARE(clips().size(),1);
         backend->setProperty("state","recording");
