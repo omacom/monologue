@@ -133,7 +133,28 @@ private slots:
         QVERIFY(translator.translate("Backend","Quit").isNull());
         QVERIFY(write(dir.filePath("language"),"da\n")); QTRY_COMPARE(translator.language(),QString("da"));
         QVERIFY(translator.translate("Backend","Save").isNull());
+        // A first pick can create Omarchy's config directory, too.
+        const QString later=dir.filePath("config/omarchy/language");
+        Translator fresh(later,dir.path());
+        QCOMPARE(fresh.language(),QString("en"));
+        QVERIFY(QDir().mkpath(QFileInfo(later).absolutePath()));
+        QVERIFY(write(later,"pt\n")); QTRY_COMPARE(fresh.language(),QString("pt"));
+        QCOMPARE(fresh.translate("Backend","Retry"),QString("Tentar de novo"));
         // A Translator sets the application's locale; the remaining tests expect the system's.
+        QLocale::setDefault(QLocale::system()); QGuiApplication::setLayoutDirection(Qt::LeftToRight);
+    }
+    void translatorPicksPluralFormsByCatalog() {
+        QTemporaryDir dir;
+        auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
+        QVERIFY(write(dir.filePath("language"),"ru\n"));
+        QVERIFY(write(dir.filePath("en.json"),R"({"%n clips": {"one": "%n clip", "other": "%n clips"}, "%n takes": {"one": "%n take", "other": "%n takes"}})"));
+        QVERIFY(write(dir.filePath("ru.json"),R"({"%n clips": {"one": "%n клип", "few": "%n клипа", "many": "%n клипов", "other": "%n клипа"}})"));
+        Translator translator(dir.filePath("language"),dir.path());
+        QCOMPARE(translator.translate("EditBar","%n clips",nullptr,21),QString("%n клип"));
+        QCOMPARE(translator.translate("EditBar","%n clips",nullptr,25),QString("%n клипов"));
+        // A counted string Russian lacks falls back to English with English rules: 21 is "one" in Russian, plural in English.
+        QCOMPARE(translator.translate("EditBar","%n takes",nullptr,21),QString("%n takes"));
+        QCOMPARE(translator.translate("EditBar","%n takes",nullptr,1),QString("%n take"));
         QLocale::setDefault(QLocale::system()); QGuiApplication::setLayoutDirection(Qt::LeftToRight);
     }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
