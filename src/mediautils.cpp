@@ -10,6 +10,7 @@
 #include <limits>
 #include <cstdio>
 #include <sys/stat.h>
+#include <unistd.h>
 
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
@@ -84,7 +85,12 @@ QString media::moveIntoPlace(const QString &partial, const QString &destination)
     // gives an unedited save: the replaced file's mode, or the umask's default.
     const auto from = QFile::encodeName(partial), to = QFile::encodeName(destination);
     struct stat existing;
-    const mode_t mode = ::stat(to.constData(), &existing) == 0 ? existing.st_mode & 07777 : 0666 & ~currentUmask();
+    mode_t mode = 0666 & ~currentUmask();
+    if (::stat(to.constData(), &existing) == 0) {
+        mode = existing.st_mode & 07777;
+        // Group bits mean nothing without the group; keep the file to its owner if it can't be had.
+        if (::chown(from.constData(), uid_t(-1), existing.st_gid) != 0) mode &= 07700;
+    }
     if (::chmod(from.constData(), mode) != 0 || std::rename(from.constData(), to.constData()) != 0)
         return "Could not move the finished MP4 into place.";
     return {};

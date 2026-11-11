@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QScopeGuard>
 #include <cstring>
 #include <QTemporaryDir>
 #include <QImage>
@@ -98,9 +99,10 @@ private slots:
         QVERIFY(QFile::setPermissions(dir.filePath("edited.mp4"),QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup));
         QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
         QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup);
-        const mode_t umask=::umask(077);
-        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("private.mp4")).isEmpty());
-        ::umask(umask);
+        {
+            const auto restore=qScopeGuard([umask=::umask(077)] { ::umask(umask); });
+            QVERIFY(media::moveIntoPlace(partial(),dir.filePath("private.mp4")).isEmpty());
+        }
         QCOMPARE(QFileInfo(dir.filePath("private.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner);
         // A partial that can't be moved leaves the file it would have replaced alone.
         QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
