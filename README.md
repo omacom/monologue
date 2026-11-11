@@ -12,7 +12,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 
 ## Build and run
 
-Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer) with its FFmpeg backend `qt6-multimedia-ffmpeg`, `libpulse`, and `ffmpeg`; `pkgbuild/PKGBUILD` is the full list. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
+Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer) with its FFmpeg backend `qt6-multimedia-ffmpeg`, `libpulse`, and `ffmpeg`; omarchy-pkgs' PKGBUILD is the full list. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
 
 ```sh
 ./bin/build
@@ -21,11 +21,7 @@ Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-m
 
 The save dialog requires `xdg-desktop-portal` and your desktop's portal backend. Monologue uses Qt's FFmpeg multimedia backend for timestamped capture; the binary selects it automatically.
 
-To build and install the Arch package (makepkg runs `bin/build` itself):
-
-```sh
-./bin/install
-```
+Monologue is packaged in [omarchy-pkgs](https://github.com/omacom/omarchy-pkgs/tree/master/pkgbuilds/monologue), whose PKGBUILD is also the list of dependencies CI installs.
 
 ## Shortcuts
 

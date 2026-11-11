@@ -31,11 +31,13 @@ enable_testing()
 add_executable(monologue_tests tests/backend_tests.cpp)
 target_link_libraries(monologue_tests PRIVATE monologue_core Qt6::Test)
 add_test(NAME monologue_tests COMMAND monologue_tests)
+set_tests_properties(monologue_tests PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
 # Drives the real Main.qml offscreen against a fake backend, so it carries the QML.
 add_executable(monologue_ui_tests tests/ui_tests.cpp src/resources.qrc)
 target_link_libraries(monologue_ui_tests PRIVATE monologue_core Qt6::Test)
 add_test(NAME monologue_ui_tests COMMAND monologue_ui_tests)
+set_tests_properties(monologue_ui_tests PROPERTIES ENVIRONMENT QT_QPA_PLATFORM=offscreen)
 
 # Records from the real camera and microphone, so only bin/test-camera runs it.
 add_executable(camera_check tests/camera_check.cpp)
