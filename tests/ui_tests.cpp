@@ -167,6 +167,11 @@ QtObject {
         // A double-click a few pixels from a pause mark splits exactly at the pause.
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+4,at60.y()));
         QCOMPARE(clips().size(),2); QCOMPARE(clips()[0].toMap()["end"].toDouble(),61.5);
+        // Pressing a clip's ×, then sliding off it before letting go, removes nothing and drags nothing.
+        const QPoint remove(xFor(61.5)-12-4-10,barOrigin.y()+17);
+        QTest::mouseMove(window,remove); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,remove);
+        QTest::mouseMove(window,remove-QPoint(40,0)); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,remove-QPoint(40,0));
+        QCOMPARE(clips().size(),2);
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
         QCOMPARE(clips().size(),1);
         backend->setProperty("state","recording");
