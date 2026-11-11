@@ -7,6 +7,9 @@ import QtQuick
 Item {
     id: root
     implicitHeight: 64
+    // Time runs left to right in every language, and the hit testing below assumes it.
+    LayoutMirroring.enabled: false
+    LayoutMirroring.childrenInherit: true
 
     readonly property real durationSec: backend.duration
     readonly property var clips: backend.clips
@@ -175,9 +178,9 @@ Item {
     // Hint above the timeline: the time under a dragged handle, or what a double-click will do.
     Rectangle {
         readonly property bool dragging: area.mode === 1
-        readonly property string hint: area.gapHovered >= 0 ? "Double-click to restore"
-                                      : area.splitHovered >= 0 ? "Double-click to join"
-                                      : area.clipHovered >= 0 && !area.onHandle ? "Double-click to split" : ""
+        readonly property string hint: area.gapHovered >= 0 ? qsTr("Double-click to restore")
+                                      : area.splitHovered >= 0 ? qsTr("Double-click to join")
+                                      : area.clipHovered >= 0 && !area.onHandle ? qsTr("Double-click to split") : ""
         visible: root.enabled && (area.mode === 1 || (area.mode === 0 && area.containsMouse && !area.removeHovered && hint !== ""))
         width: label.implicitWidth + 20; height: 26
         radius: Math.min(7, root.cornerRadius + 1); color: "#2c2c2f"

@@ -43,7 +43,7 @@ Backend::Backend(FilePicker *picker, bool activateHardware, QObject *parent)
     m_finishTimeout.setInterval(2000);
     connect(&m_finishTimeout, &QTimer::timeout, this, [this] {
         if (!m_writer || m_finishAt < 0) return;
-        if (m_interruption.isEmpty()) m_interruption = "The final capture buffers did not arrive, so the take ends a moment early.";
+        if (m_interruption.isEmpty()) m_interruption = tr("The final capture buffers did not arrive, so the take ends a moment early.");
         m_finishAt = -1;
         m_writer->finish();
     });
@@ -57,11 +57,11 @@ int Backend::cameraIndex() const { return indexOf(m_cameras,m_cameraId); }
 int Backend::microphoneIndex() const { return indexOf(m_microphones,m_audioId); }
 bool Backend::ready() const { return m_state=="ready" && m_cameraHealthy && (!audioEnabled() || m_audioHealthy); }
 QString Backend::meterText() const {
-    if (!audioEnabled()) return "Audio off";
-    if (!m_audioHealthy) return "Unavailable";
-    if (clipping()) return "Clipping";
-    if (now()-m_signalAt > 3000000) return "No signal";
-    return QString::number(qRound(m_level)) + " dBFS";
+    if (!audioEnabled()) return tr("Audio off");
+    if (!m_audioHealthy) return tr("Unavailable");
+    if (clipping()) return tr("Clipping");
+    if (now()-m_signalAt > 3000000) return tr("No signal");
+    return tr("%1 dBFS").arg(qRound(m_level));
 }
 void Backend::setPreview(QObject *sink) {
     m_preview=qobject_cast<QVideoSink*>(sink);
@@ -91,14 +91,14 @@ void Backend::refreshDevices() {
     m_cameras.clear(); m_microphones.clear();
     for(const auto &d:cameras) m_cameras.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,cameras)}});
     for(const auto &d:microphones) m_microphones.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,microphones)}});
-    m_microphones.append(QVariantMap{{"id","none"},{"label","No audio"}});
+    m_microphones.append(QVariantMap{{"id","none"},{"label",tr("No audio")}});
     const bool cameraMissing=indexOf(m_cameras,m_cameraId)<0;
     const bool audioMissing=indexOf(m_microphones,m_audioId)<0;
-    if(cameraMissing) m_cameras.prepend(QVariantMap{{"id",m_cameraId},{"label",m_settings.value("camera/label","Camera").toString()+" — unavailable"}});
-    if(audioMissing) m_microphones.prepend(QVariantMap{{"id",m_audioId},{"label",m_settings.value("microphone/label","Microphone").toString()+" — unavailable"}});
+    if(cameraMissing) m_cameras.prepend(QVariantMap{{"id",m_cameraId},{"label",tr("%1 — unavailable").arg(m_settings.value("camera/label",tr("Camera")).toString())}});
+    if(audioMissing) m_microphones.prepend(QVariantMap{{"id",m_audioId},{"label",tr("%1 — unavailable").arg(m_settings.value("microphone/label",tr("Microphone")).toString())}});
     emit devicesChanged();
     if(m_writer) {
-        if(cameraMissing || audioMissing) sourceFailed("A selected source was disconnected, so the take was stopped.");
+        if(cameraMissing || audioMissing) sourceFailed(tr("A selected source was disconnected, so the take was stopped."));
     } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
         // Do not reopen healthy devices when an unrelated input is plugged in.
         if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
@@ -122,23 +122,23 @@ void Backend::activateSources() {
     for(const auto &d:QMediaDevices::videoInputs()) if(deviceId(d.id())==m_cameraId) selectedCamera=d;
     QAudioDevice selectedAudio;
     for(const auto &d:QMediaDevices::audioInputs()) if(deviceId(d.id())==m_audioId) selectedAudio=d;
-    if(selectedCamera.isNull()) { m_state="unavailable"; m_message="Connect a camera or choose an available video source."; }
+    if(selectedCamera.isNull()) { m_state="unavailable"; m_message=tr("Connect a camera or choose an available video source."); }
     else {
         m_cameraFormat=media::bestCameraFormat(selectedCamera);
-        if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message="This camera advertises no supported video formats."; }
+        if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message=tr("This camera advertises no supported video formats."); }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
-            m_formatLabel=QString("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
+            m_formatLabel=tr("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
             m_camera=new QCamera(selectedCamera,this);
             m_camera->setCameraFormat(m_cameraFormat);
             m_capture.setCamera(m_camera);
-            connect(m_camera,&QCamera::errorOccurred,this,[this](auto,const QString &error) { sourceFailed("Camera: "+error); });
+            connect(m_camera,&QCamera::errorOccurred,this,[this](auto,const QString &error) { sourceFailed(tr("Camera: %1").arg(error)); });
             m_camera->start();
         }
     }
     m_audioFormat=QAudioFormat();
     if(audioEnabled()) {
-        if(selectedAudio.isNull()) { m_state="unavailable"; m_message="Choose an available microphone, or select No audio."; }
+        if(selectedAudio.isNull()) { m_state="unavailable"; m_message=tr("Choose an available microphone, or select No audio."); }
         else {
             m_audioFormat=selectedAudio.preferredFormat();
             m_audio=new AudioCapture([this] { return now(); },this);
@@ -146,9 +146,9 @@ void Backend::activateSources() {
             connect(m_audio,&AudioCapture::failed,this,&Backend::sourceFailed);
             m_audio->start(selectedAudio.id(),m_audioFormat);
         }
-    } else { m_settings.setValue("microphone/id","none"); m_settings.setValue("microphone/label","No audio"); }
-    if(QStandardPaths::findExecutable("ffprobe").isEmpty() || QStandardPaths::findExecutable("ffmpeg").isEmpty()) { m_state="unavailable"; m_message="Install ffmpeg (including ffprobe) to record and inspect clips."; }
-    else if(!Writer::supported(audioEnabled())) { m_state="unavailable"; m_message="This Qt multimedia backend cannot encode H.264 MP4 with the selected audio mode."; }
+    } else { m_settings.setValue("microphone/id","none"); m_settings.setValue("microphone/label",tr("No audio")); }
+    if(QStandardPaths::findExecutable("ffprobe").isEmpty() || QStandardPaths::findExecutable("ffmpeg").isEmpty()) { m_state="unavailable"; m_message=tr("Install ffmpeg (including ffprobe) to record and inspect clips."); }
+    else if(!Writer::supported(audioEnabled())) { m_state="unavailable"; m_message=tr("This Qt multimedia backend cannot encode H.264 MP4 with the selected audio mode."); }
     emit changed();
 }
 void Backend::updateReady() {
@@ -160,7 +160,7 @@ void Backend::receiveVideo(const QVideoFrame &frame) {
     if(!m_camera || !frame.isValid()) return;
     m_lastVideoAt=now();
     if(frame.size()!=m_cameraFormat.resolution()) {
-        sourceFailed("The camera did not provide its maximum resolution. Choose another source or Retry."); return;
+        sourceFailed(tr("The camera did not provide its maximum resolution. Choose another source or Retry.")); return;
     }
     m_lastFrame=frame;
     // Once stopped, the preview holds the take's final frame while it finalizes.
@@ -211,8 +211,8 @@ void Backend::tick() {
     m_pendingPeak=0; emit meterChanged();
     if(m_writer && (m_state=="recording" || m_state=="paused")) { m_duration=m_writer->duration(time)/1000000.0; emit changed(); }
     if((m_state=="starting" || m_state=="ready" || m_state=="recording" || m_state=="paused") && time-m_activatedAt>5000000) {
-        if(m_camera && time-m_lastVideoAt>3000000) sourceFailed("The camera stopped delivering video. Check the connection, then Retry.");
-        else if(audioEnabled() && m_audio && time-m_lastAudioAt>3000000) sourceFailed("The microphone stopped delivering audio. Check the connection, then Retry.");
+        if(m_camera && time-m_lastVideoAt>3000000) sourceFailed(tr("The camera stopped delivering video. Check the connection, then Retry."));
+        else if(audioEnabled() && m_audio && time-m_lastAudioAt>3000000) sourceFailed(tr("The microphone stopped delivering audio. Check the connection, then Retry."));
     }
 }
 void Backend::sourceFailed(const QString &message) {
@@ -246,7 +246,7 @@ void Backend::startTake() {
     if(!ready() || !m_lastFrame.isValid()) return;
     m_takeId=QUuid::createUuid().toString(QUuid::WithoutBraces);
     const QString directory=m_root+"/"+m_takeId;
-    if(!QDir().mkpath(directory) || !lockTake(directory)) { m_message="Could not create the recording folder. Check available space and permissions."; emit changed(); return; }
+    if(!QDir().mkpath(directory) || !lockTake(directory)) { m_message=tr("Could not create the recording folder. Check available space and permissions."); emit changed(); return; }
     m_clipFileName="Monologue-"+QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss")+".mp4";
     m_clipPath=directory+"/"+m_clipFileName;
     m_interruption.clear(); m_duration=0;
@@ -266,7 +266,7 @@ void Backend::finish() {
     m_finishAt=now();
     m_duration=m_writer->duration(m_finishAt)/1000000.0;
     m_writer->pause(m_finishAt);
-    m_state="finalizing"; m_message=m_interruption.isEmpty()?"Finishing your clip…":m_interruption;
+    m_state="finalizing"; m_message=m_interruption.isEmpty()?tr("Finishing your clip…"):m_interruption;
     m_finishTimeout.start();
     finishWhenCaptured();
     emit changed();
@@ -306,8 +306,8 @@ void Backend::probeClip(const QString &path,bool currentTake) {
             // Nothing here can be edited; don't leave it to be "recovered" again next launch.
             deleteTake();
             m_state="unavailable";
-            m_message=!currentTake ? "Your last take was interrupted and could not be recovered."
-                    : result.ok ? "The encoded clip did not match the selected resolution or audio mode." : result.error;
+            m_message=!currentTake ? tr("Your last take was interrupted and could not be recovered.")
+                    : result.ok ? tr("The encoded clip did not match the selected resolution or audio mode.") : result.error;
         }
         emit changed();
     });
@@ -335,7 +335,7 @@ void Backend::save() {
 }
 void Backend::saveTo(const QUrl &url) {
     if(m_state!="finished") return;
-    if(!url.isLocalFile()) { m_message="Choose a local folder for the MP4 file."; emit changed(); return; }
+    if(!url.isLocalFile()) { m_message=tr("Choose a local folder for the MP4 file."); emit changed(); return; }
     auto destination=url.toLocalFile();
     if(!destination.endsWith(".mp4",Qt::CaseInsensitive)) {
         destination+=".mp4";
@@ -360,7 +360,7 @@ void Backend::writeTo(const QString &destination) {
     const auto folder=QFileInfo(QFileInfo(destination).absolutePath()).canonicalFilePath();
     const auto takes=QFileInfo(m_root).canonicalFilePath();
     if(!takes.isEmpty() && (folder==takes || folder.startsWith(takes+"/"))) {
-        m_message="Could not save: choose a folder outside Monologue's working files."; emit changed(); return;
+        m_message=tr("Could not save: choose a folder outside Monologue's working files."); emit changed(); return;
     }
     if(edit::untouched(m_edit,m_duration)) copyTo(destination);
     else exportTo(destination);
@@ -368,7 +368,7 @@ void Backend::writeTo(const QString &destination) {
 void Backend::copyTo(const QString &destination) {
     if(m_state!="finished") return;
     const auto source=m_clipPath;
-    m_state="saving"; m_message="Saving your clip…"; emit changed();
+    m_state="saving"; m_message=tr("Saving your clip…"); emit changed();
     auto *watcher=new QFutureWatcher<QString>(this);
     connect(watcher,&QFutureWatcher<QString>::finished,this,[this,watcher,destination] {
         const auto error=watcher->result(); watcher->deleteLater();
@@ -382,11 +382,11 @@ void Backend::exportTo(const QString &destination) {
     const QFileInfo target(destination);
     QTemporaryFile partial(target.absolutePath()+"/."+target.completeBaseName()+"-XXXXXX.mp4");
     partial.setAutoRemove(false);
-    if(!partial.open()) { m_message="Could not save: "+partial.errorString(); emit changed(); return; }
+    if(!partial.open()) { m_message=tr("Could not save: %1").arg(partial.errorString()); emit changed(); return; }
     m_exportPartial=partial.fileName();
     partial.close();
     const double total=keptDuration();
-    m_state="saving"; m_message="Saving your clip…"; m_saveProgress=0; emit changed();
+    m_state="saving"; m_message=tr("Saving your clip…"); m_saveProgress=0; emit changed();
     m_export=new QProcess(this);
     connect(m_export,&QProcess::readyReadStandardOutput,this,[this,total] {
         while(m_export->canReadLine()) {
@@ -402,15 +402,15 @@ void Backend::exportTo(const QString &destination) {
         QString error;
         if(status!=QProcess::NormalExit || code!=0) {
             error=QString::fromUtf8(process->readAllStandardError()).trimmed().left(500);
-            if(error.isEmpty()) error="ffmpeg could not encode the clip.";
+            if(error.isEmpty()) error=tr("ffmpeg could not encode the clip.");
         } else if(std::rename(QFile::encodeName(m_exportPartial).constData(),QFile::encodeName(destination).constData())!=0)
-            error="Could not move the finished MP4 into place.";
+            error=tr("Could not move the finished MP4 into place.");
         saved(destination,error);
     });
     connect(m_export,&QProcess::errorOccurred,this,[this,destination](QProcess::ProcessError error) {
         if(error!=QProcess::FailedToStart) return;
         m_export->deleteLater(); m_export=nullptr;
-        saved(destination,"ffmpeg could not be started.");
+        saved(destination,tr("ffmpeg could not be started."));
     });
     m_export->start("ffmpeg",media::exportArgs(m_clipPath,m_exportPartial,edit::kept(m_edit),m_clipAudio));
 }
@@ -418,7 +418,7 @@ void Backend::saved(const QString &destination,const QString &error) {
     if(!error.isEmpty() && !m_exportPartial.isEmpty()) QFile::remove(m_exportPartial);
     m_exportPartial.clear();
     m_state="finished"; m_saveProgress=0;
-    m_message=error.isEmpty()?"Saved to "+destination:"Could not save: "+error;
+    m_message=error.isEmpty()?tr("Saved to %1").arg(destination):tr("Could not save: %1").arg(error);
     if(error.isEmpty()) {
         m_settings.setValue("saveDirectory",QFileInfo(destination).absolutePath());
         m_savedEdit=m_edit; m_hasSaved=true;
@@ -531,7 +531,7 @@ void Backend::recoverTake() {
         // Only a recent take is worth reopening; anything older is just left over.
         const QFileInfo file(entry.filePath()+"/"+clip);
         if(clip.isEmpty() || file.lastModified().secsTo(QDateTime::currentDateTime())>=3600) { deleteTake(); continue; }
-        m_interruption="Recovered the take from your last session.";
+        m_interruption=tr("Recovered the take from your last session.");
         m_pauses.clear();
         probeClip(entry.filePath()+"/"+clip,false);
         return;

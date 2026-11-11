@@ -1,4 +1,5 @@
 #include "mediautils.h"
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -54,7 +55,7 @@ double media::peak(const QByteArray &data, const QAudioFormat &format) {
 }
 QString media::copyAtomically(const QString &source, const QString &destination) {
     if (QFileInfo(source).canonicalFilePath() == QFileInfo(destination).canonicalFilePath())
-        return "Choose a destination outside the retained recording itself.";
+        return QCoreApplication::translate("media", "Choose a destination outside the retained recording itself.");
     QFile input(source);
     if (!input.open(QIODevice::ReadOnly)) return input.errorString();
     QSaveFile output(destination);
@@ -81,12 +82,12 @@ QString media::normalizeMp4(const QString &path, double fps) {
                             "-movflags", "+faststart", temporary});
     if(!process.waitForFinished(120000)) {
         process.kill(); process.waitForFinished();
-        return "Finalizing the recording timed out.";
+        return QCoreApplication::translate("media", "Finalizing the recording timed out.");
     }
     if(process.exitStatus()!=QProcess::NormalExit || process.exitCode()!=0)
-        return "Could not finalize the MP4: "+QString::fromUtf8(process.readAllStandardError()).left(500);
+        return QCoreApplication::translate("media", "Could not finalize the MP4: %1").arg(QString::fromUtf8(process.readAllStandardError()).left(500));
     if(std::rename(QFile::encodeName(temporary).constData(),QFile::encodeName(path).constData())!=0)
-        return "Could not replace the finalized clip.";
+        return QCoreApplication::translate("media", "Could not replace the finalized clip.");
     return {};
 }
 media::Probe media::probe(const QString &path) {
@@ -95,7 +96,7 @@ media::Probe media::probe(const QString &path) {
     process.start("ffprobe", {"-v", "error", "-show_streams", "-show_format", "-of", "json", path});
     if (!process.waitForFinished(30000)) {
         process.kill(); process.waitForFinished();
-        result.error = "Could not inspect the clip with ffprobe."; return result;
+        result.error = QCoreApplication::translate("media", "Could not inspect the clip with ffprobe."); return result;
     }
     const auto doc = QJsonDocument::fromJson(process.readAllStandardOutput()).object();
     for (const auto &entry : doc["streams"].toArray()) {
@@ -107,7 +108,7 @@ media::Probe media::probe(const QString &path) {
     result.duration = doc["format"].toObject()["duration"].toString().toDouble();
     result.ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 &&
                 !result.size.isEmpty() && result.duration > 0;
-    if (!result.ok) result.error = "The recording could not be finalized as a playable H.264 MP4.";
+    if (!result.ok) result.error = QCoreApplication::translate("media", "The recording could not be finalized as a playable H.264 MP4.");
     return result;
 }
 QStringList media::exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio) {

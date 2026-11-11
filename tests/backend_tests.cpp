@@ -16,6 +16,7 @@
 #include "theme.h"
 #include "writer.h"
 #include "backend.h"
+#include "translator.h"
 
 class FakePicker : public FilePicker {
 public:
@@ -116,6 +117,24 @@ private slots:
         QVERIFY(write(response,"{\"int\":0}")); QTRY_COMPARE(theme.radius(),0);
         QVERIFY(write(response,"{\"int\":8}")); QTRY_COMPARE(theme.radius(),8);
         QVERIFY(write(response,"unavailable")); QTest::qWait(1200); QCOMPARE(theme.radius(),8);
+    }
+    void translatorFollowsTheLanguageFile() {
+        QTemporaryDir dir;
+        auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
+        Translator english(dir.filePath("language"),dir.path());
+        QCOMPARE(english.language(),QString("en")); QVERIFY(english.translate("Backend","Save").isNull());
+        QVERIFY(write(dir.filePath("language"),"pt-BR\n"));
+        QVERIFY(write(dir.filePath("pt.json"),R"({"Save": "Guardar", "Retry": "Tentar de novo"})"));
+        QVERIFY(write(dir.filePath("pt-BR.json"),R"({"Save": "Salvar"})"));
+        Translator translator(dir.filePath("language"),dir.path());
+        QCOMPARE(translator.language(),QString("pt-BR"));
+        QCOMPARE(translator.translate("Backend","Save"),QString("Salvar"));
+        QCOMPARE(translator.translate("Backend","Retry"),QString("Tentar de novo"));
+        QVERIFY(translator.translate("Backend","Quit").isNull());
+        QVERIFY(write(dir.filePath("language"),"da\n")); QTRY_COMPARE(translator.language(),QString("da"));
+        QVERIFY(translator.translate("Backend","Save").isNull());
+        // A Translator sets the application's locale; the remaining tests expect the system's.
+        QLocale::setDefault(QLocale::system()); QGuiApplication::setLayoutDirection(Qt::LeftToRight);
     }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
     void realEncoding() {
