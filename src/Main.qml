@@ -17,6 +17,9 @@ ApplicationWindow {
     readonly property color accent: theme.accent
     readonly property color accentForeground: theme.foreground
     readonly property int cornerRadius: theme.radius
+    // Right-to-left languages mirror the window; the Translator sets the application's layout direction.
+    // Popups don't inherit it, so each dialog's content and buttons opt in too.
+    readonly property bool rightToLeft: Qt.application.layoutDirection === Qt.RightToLeft
     readonly property bool finished: backend.state === "finished" || backend.state === "saving"
     readonly property bool busy: backend.state === "finalizing" || backend.state === "saving"
     readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
@@ -234,6 +237,7 @@ ApplicationWindow {
             padding: 24; bottomPadding: 0; elide: Text.ElideRight
         }
         footer: DialogButtonBox {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             Material.roundedScale: win.cornerRadius
             background: Item { }
             visible: count > 0
@@ -327,8 +331,7 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent; spacing: 0
-        // Right-to-left languages mirror the window; the Translator sets the application's layout direction.
-        LayoutMirroring.enabled: Qt.application.layoutDirection === Qt.RightToLeft
+        LayoutMirroring.enabled: win.rightToLeft
         LayoutMirroring.childrenInherit: true
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
@@ -462,7 +465,7 @@ ApplicationWindow {
                     RoundButton {
                         id: pauseButton
                         visible: backend.takeActive; enabled: !win.busy
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                         width: 40; height: 40; padding: 0; flat: true
                         focusPolicy: Qt.TabFocus
                         readonly property bool paused: backend.state === "paused"
@@ -480,7 +483,7 @@ ApplicationWindow {
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                     Label {
-                        visible: win.finished; anchors.verticalCenter: parent.verticalCenter
+                        visible: win.finished; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                         text: win.preciseTime(backend.keptDuration); font.family: "monospace"; font.pixelSize: 13; color: win.dimColor
                         ToolTip.visible: keptHover.hovered; ToolTip.text: qsTr("Length of all clips")
                         HoverHandler { id: keptHover }
@@ -533,6 +536,7 @@ ApplicationWindow {
         id: closeDialog; anchors.centerIn: parent; modal: true; title: qsTr("Quit and discard this take?")
         closePolicy: Popup.CloseOnEscape
         ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 16
             Label { text: qsTr("Quitting deletes the take you're recording. Stop to edit and save it first."); wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
             RowLayout {
@@ -549,6 +553,7 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape
         property string action: "new"
         ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             width: parent.width; spacing: 16
             Label {
                 Layout.fillWidth: true; wrapMode: Text.WordWrap
@@ -572,6 +577,7 @@ ApplicationWindow {
         exit: Transition { }
         onOpened: restartConfirm.forceActiveFocus()
         footer: DialogButtonBox {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             Material.roundedScale: win.cornerRadius
             background: Item { }
             ActionButton {
@@ -602,6 +608,7 @@ ApplicationWindow {
     ThemedDialog {
         id: helpDialog; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
         RowLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 40
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Recording")

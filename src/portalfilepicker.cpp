@@ -54,7 +54,7 @@ const QDBusArgument &operator>>(const QDBusArgument &argument, PortalFileFilter 
 }
 
 PortalFileFilter mp4Filter() {
-    return {QStringLiteral("MP4 video"), {{0, QStringLiteral("*.mp4")}}};
+    return {PortalFilePicker::tr("MP4 video"), {{0, QStringLiteral("*.mp4")}}};
 }
 
 QString portalToken() {
