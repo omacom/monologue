@@ -239,6 +239,9 @@ QtObject {
 };
 int main(int argc,char**argv) {
     qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    // Rendered the same with or without a GPU, and without the desktop's platform theme plugin.
+    qputenv("QT_QPA_PLATFORMTHEME","");
+    qputenv("QT_QUICK_BACKEND","software");
     QGuiApplication app(argc,argv); QQuickStyle::setStyle("Material");
     UiTests tests; return QTest::qExec(&tests,argc,argv);
 }

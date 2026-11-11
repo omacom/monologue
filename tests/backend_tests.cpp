@@ -395,6 +395,8 @@ private slots:
 };
 int main(int argc,char**argv) {
     qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    // The desktop's platform theme plugin has no place in a test run.
+    qputenv("QT_QPA_PLATFORMTHEME","");
     QTemporaryDir config;
     qputenv("XDG_CONFIG_HOME",config.filePath("config").toUtf8());
     qputenv("XDG_DATA_HOME",config.filePath("data").toUtf8());
