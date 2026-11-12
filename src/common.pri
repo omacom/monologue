@@ -1,5 +1,5 @@
 CONFIG += link_pkgconfig
-PKGCONFIG += libpulse
+PKGCONFIG += libpulse libturbojpeg
 HEADERS += $$PWD/theme.h $$PWD/mediautils.h $$PWD/writer.h $$PWD/backend.h \
     $$PWD/filepicker.h $$PWD/portalfilepicker.h $$PWD/audiocapture.h \
     $$PWD/edit.h $$PWD/thumbnails.h
