@@ -6,6 +6,7 @@
 #include <QTimer>
 #include "backend.h"
 #include "theme.h"
+#include "translator.h"
 #include "thumbprovider.h"
 
 int main(int argc,char *argv[]) {
@@ -16,11 +17,18 @@ int main(int argc,char *argv[]) {
     app.setApplicationVersion("0.3.1");
     app.setOrganizationName("omacom");
     app.setDesktopFileName("monologue");
-    app.setWindowIcon(QIcon("qrc:/monologue.svg"));
+    app.setWindowIcon(QIcon(":/monologue.svg"));
     QQuickStyle::setStyle("Material");
+    // Installed before anything is translated, and every qsTr() binding is
+    // re-evaluated when the Omarchy language changes.
+    Translator translator;
+    app.installTranslator(&translator);
     Theme theme;
     Backend backend;
     QQmlApplicationEngine engine;
+    QObject::connect(&translator,&Translator::changed,&engine,&QQmlEngine::retranslate);
+    QObject::connect(&translator,&Translator::changed,&backend,&Backend::retranslate);
+    engine.rootContext()->setContextProperty("translator",&translator);
     engine.rootContext()->setContextProperty("theme",&theme);
     engine.rootContext()->setContextProperty("backend",&backend);
     engine.addImageProvider("thumbs",new ThumbProvider(backend.thumbnails()->store()));

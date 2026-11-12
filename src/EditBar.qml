@@ -7,6 +7,9 @@ import QtQuick
 Item {
     id: root
     implicitHeight: 64
+    // Time runs left to right in every language, and the hit testing below assumes it.
+    LayoutMirroring.enabled: false
+    LayoutMirroring.childrenInherit: true
 
     readonly property real durationSec: backend.duration
     readonly property var clips: backend.clips
@@ -175,9 +178,9 @@ Item {
     // Hint above the timeline: the time under a dragged handle, or what a double-click will do.
     Rectangle {
         readonly property bool dragging: area.mode === 1
-        readonly property string hint: area.gapHovered >= 0 ? "Double-click to restore"
-                                      : area.splitHovered >= 0 ? "Double-click to join"
-                                      : area.clipHovered >= 0 && !area.onHandle ? "Double-click to split" : ""
+        readonly property string hint: area.gapHovered >= 0 ? qsTr("Double-click to restore")
+                                      : area.splitHovered >= 0 ? qsTr("Double-click to join")
+                                      : area.clipHovered >= 0 && !area.onHandle ? qsTr("Double-click to split") : ""
         visible: root.enabled && (area.mode === 1 || (area.mode === 0 && area.containsMouse && !area.removeHovered && hint !== ""))
         width: label.implicitWidth + 20; height: 26
         radius: Math.min(7, root.cornerRadius + 1); color: "#2c2c2f"
@@ -277,6 +280,7 @@ Item {
             var t = root.timeForX(mouse.x)
             if (mode === 0) { hover(mouse.x, mouse.y); return }
             if (mode === 2) { seek(t); return }
+            if (mode !== 1) return
             var clip = root.clips[clipIndex]
             activeTime = snap(t)
             if (leftEdge) backend.setClip(clipIndex, Math.min(activeTime, clip.end - 0.1), clip.end)
@@ -309,6 +313,11 @@ Item {
             else if (hit.clip >= 0 && !hit.handle) backend.split(snapToPause(root.timeForX(mouse.x)))
             else if (hit.clip < 0) win.restoreGap(hit.gap)
             hover(mouse.x, mouse.y)
+        }
+        // Another item took the press: end the gesture, or the backend keeps refusing undo and redo.
+        onCanceled: {
+            if (mode === 1) backend.endGesture()
+            mode = 0; clipIndex = -1
         }
         onExited: { clipHovered = -1; gapHovered = -1; splitHovered = -1; removeHovered = false }
     }

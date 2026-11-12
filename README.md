@@ -7,12 +7,13 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
+- Follows the language picked under Omarchy's Setup > Language, live, including right-to-left layout. Every visible string goes through `qsTr()` or `tr()`; a translation is a flat JSON catalog from English text to the translation, `src/i18n/<code>.json`, listed in `src/resources.qrc`.
 - Built-in editing: split the take into clips on an Omacut-style filmstrip, trim each clip with its handles, see where you paused, and undo. Edits never touch the original.
 - H.264 MP4 with AAC audio, retained originals, and atomic Save.
 
 ## Build and run
 
-Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer), `libpulse`, `libjpeg-turbo`, and `ffmpeg`. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
+Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer) with its FFmpeg backend `qt6-multimedia-ffmpeg`, `libpulse`, `libjpeg-turbo`, and `ffmpeg`; omarchy-pkgs' PKGBUILD is the full list. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
 
 ```sh
 ./bin/build
@@ -21,11 +22,7 @@ Install a C++17 compiler, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia
 
 The save dialog requires `xdg-desktop-portal` and your desktop's portal backend. Monologue uses Qt's FFmpeg multimedia backend for timestamped capture; the binary selects it automatically.
 
-To build and install the Arch package:
-
-```sh
-./bin/install
-```
+Monologue is packaged in [omarchy-pkgs](https://github.com/omacom/omarchy-pkgs/tree/master/pkgbuilds/monologue), whose PKGBUILD is also the list of dependencies CI installs.
 
 ## Shortcuts
 
@@ -75,7 +72,7 @@ A disconnected source or encoder error stops the take and preserves its files. A
 ./bin/test
 ```
 
-Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
+Tests cover format ranking, pause timing, PCM levels, atomic saving, the edit model, undo, reopening an interrupted take, take deletion and locking, filmstrip generation, edited exports (duration and content on both sides of a cut), the first frame showing on entering the editor, theme file changes and symlink swaps, actual H.264/AAC encoding and decoding, and native QML keyboard/layout behavior with simulated sources. They run offscreen under ctest, so arguments go to ctest (`./bin/test -R ui` runs only the QML tests), and do not activate a camera or microphone. The capture-independent backend uses an injected file picker for save and recovery tests. The QML tests write inspection screenshots to `/tmp/monologue-ui-*.png`.
 
 The recording engine forwards native camera frames and one shared microphone PCM stream to timestamped Qt inputs. Microphone timestamps account for the audio server's measured capture latency, including buffered samples. The writer removes paused intervals by capture time and accepts delayed samples from before Pause or Finish. Finish briefly waits for those samples before closing the recording. Qt's audio encoder counts samples, so the writer pads genuine capture gaps and trims overlaps to maintain the common timeline. Preview and metering remain live while paused. Finish remuxes the MP4 without re-encoding to normalize packet durations and put playback metadata at the front of the file.
 
@@ -87,4 +84,4 @@ A real-camera check is still needed for each device/backend combination, particu
 
 ## License
 
-MIT. The portal file picker, theme-watching approach, and filmstrip trimming interface derive from [Omacut](../omacut), copyright David Heinemeier Hansson; attribution is retained in [LICENSE](LICENSE).
+MIT. The portal file picker, theme-watching approach, and filmstrip trimming interface derive from [Omacut](https://github.com/omacom-io/omacut), copyright David Heinemeier Hansson; attribution is retained in [LICENSE](LICENSE).
