@@ -14,7 +14,7 @@ int main(int argc,char *argv[]) {
     media::useFfmpeg();
     QGuiApplication app(argc,argv);
     app.setApplicationName("monologue");
-    app.setApplicationVersion("0.3.1");
+    app.setApplicationVersion("0.4.0");
     app.setOrganizationName("omacom");
     app.setDesktopFileName("monologue");
     app.setWindowIcon(QIcon(":/monologue.svg"));
