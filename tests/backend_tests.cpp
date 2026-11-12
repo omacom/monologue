@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QScopeGuard>
 #include <cstring>
 #include <QTemporaryDir>
 #include <QImage>
@@ -12,6 +13,7 @@
 #include <QStandardPaths>
 #include <QSettings>
 #include <cmath>
+#include <sys/stat.h>
 #include "mediautils.h"
 #include "theme.h"
 #include "writer.h"
@@ -91,6 +93,21 @@ private slots:
         QVERIFY(!media::copyAtomically(f.fileName(),dir.filePath("missing/copy.mp4")).isEmpty());
         QVERIFY(!media::copyAtomically(f.fileName(),f.fileName()).isEmpty());
         QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(),QByteArray("kept content"));
+        // An encoded partial lands with the permissions of any new file, or of the file it replaces.
+        auto partial=[&] { QTemporaryFile t(dir.filePath(".partial-XXXXXX.mp4")); t.setAutoRemove(false); return t.open() ? t.fileName() : QString(); };
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions(),QFileInfo(dir.filePath("copy with spaces.mp4")).permissions());
+        QVERIFY(QFile::setPermissions(dir.filePath("edited.mp4"),QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup));
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup);
+        {
+            const auto restore=qScopeGuard([umask=::umask(077)] { ::umask(umask); });
+            QVERIFY(media::moveIntoPlace(partial(),dir.filePath("private.mp4")).isEmpty());
+        }
+        QCOMPARE(QFileInfo(dir.filePath("private.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner);
+        // A partial that can't be moved leaves the file it would have replaced alone.
+        QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
+        QVERIFY(QFile::exists(dir.filePath("copy with spaces.mp4")));
     }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");

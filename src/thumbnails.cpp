@@ -1,5 +1,6 @@
 #include "thumbnails.h"
 #include "mediautils.h"
+#include <QColor>
 
 Thumbnails::Thumbnails(QObject *parent) : QObject(parent) { m_pool.setMaxThreadCount(4); }
 Thumbnails::~Thumbnails() { cancel(); m_pool.waitForDone(); }
@@ -44,7 +45,10 @@ void Thumbnails::generate() {
 }
 void Thumbnails::arrived(int revision, int index, const QImage &image) {
     if (revision != m_revision) return;
-    m_images[index] = image.isNull() ? QImage(1, 1, QImage::Format_RGB32) : image;
+    // A frame ffmpeg couldn't extract shows as the empty strip, not as an uninitialized pixel.
+    QImage placeholder(1, 1, QImage::Format_RGB32);
+    placeholder.fill(QColor(0x1c, 0x1c, 0x1e));
+    m_images[index] = image.isNull() ? placeholder : image;
     m_store->set(index, m_images[index]);
     // Reveal in order, so the strip fills from left to right.
     while (m_ready < Count && !m_images[m_ready].isNull()) ++m_ready;

@@ -414,8 +414,7 @@ void Backend::exportTo(const QString &destination) {
         if(status!=QProcess::NormalExit || code!=0) {
             error=QString::fromUtf8(process->readAllStandardError()).trimmed().left(500);
             if(error.isEmpty()) error=tr("ffmpeg could not encode the clip.");
-        } else if(std::rename(QFile::encodeName(m_exportPartial).constData(),QFile::encodeName(destination).constData())!=0)
-            error=tr("Could not move the finished MP4 into place.");
+        } else error=media::moveIntoPlace(m_exportPartial,destination);
         saved(destination,error);
     });
     connect(m_export,&QProcess::errorOccurred,this,[this,destination](QProcess::ProcessError error) {

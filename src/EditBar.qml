@@ -280,6 +280,7 @@ Item {
             var t = root.timeForX(mouse.x)
             if (mode === 0) { hover(mouse.x, mouse.y); return }
             if (mode === 2) { seek(t); return }
+            if (mode !== 1) return
             var clip = root.clips[clipIndex]
             activeTime = snap(t)
             if (leftEdge) backend.setClip(clipIndex, Math.min(activeTime, clip.end - 0.1), clip.end)
@@ -312,6 +313,11 @@ Item {
             else if (hit.clip >= 0 && !hit.handle) backend.split(snapToPause(root.timeForX(mouse.x)))
             else if (hit.clip < 0) win.restoreGap(hit.gap)
             hover(mouse.x, mouse.y)
+        }
+        // Another item took the press: end the gesture, or the backend keeps refusing undo and redo.
+        onCanceled: {
+            if (mode === 1) backend.endGesture()
+            mode = 0; clipIndex = -1
         }
         onExited: { clipHovered = -1; gapHovered = -1; splitHovered = -1; removeHovered = false }
     }
