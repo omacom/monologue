@@ -432,8 +432,8 @@ private slots:
         const auto path=directory.filePath("sync.mp4");
         QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(1); format.setSampleFormat(QAudioFormat::Int16);
         Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
-        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(64,64),QVideoFrameFormat::Format_BGRA8888),30,format,0));
-        QImage first(64,64,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,format,0));
+        QImage first(320,240,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
         int nextVideo=0, nextAudio=0;
         bool paused=false,resumed=false,finished=false;
         const QList<qint64> events{300000,966667,2300000,2966667};
@@ -445,7 +445,7 @@ private slots:
             // 80 ms plus the 20 ms buffer itself. Both describe the same events.
             while(qRound64(nextVideo*1000000.0/30)+33333<=delivered) {
                 const qint64 captured=qRound64(nextVideo*1000000.0/30);
-                QImage image(64,64,QImage::Format_RGB32);
+                QImage image(320,240,QImage::Format_RGB32);
                 image.fill(events.contains(captured)?Qt::white:Qt::black);
                 writer.video(QVideoFrame(image),captured); ++nextVideo;
             }
