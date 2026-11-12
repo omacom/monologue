@@ -109,6 +109,16 @@ private slots:
         QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
         QVERIFY(QFile::exists(dir.filePath("copy with spaces.mp4")));
     }
+    void sourceFallsBackWhenTheRememberedOneIsGone() {
+        const QStringList connected{"logi","builtin"};
+        QCOMPARE(media::chooseSource(connected,"builtin","logi"),QString("logi"));
+        // An unplugged Cam Link gives way to the default, or the first source when the default isn't offered (an infrared sensor).
+        QCOMPARE(media::chooseSource(connected,"builtin","camlink"),QString("builtin"));
+        QCOMPARE(media::chooseSource(connected,"infrared","camlink"),QString("logi"));
+        QCOMPARE(media::chooseSource(connected,"builtin",""),QString("builtin"));
+        // With nothing connected, the remembered source stays, so it's shown as unavailable.
+        QCOMPARE(media::chooseSource({},"","camlink"),QString("camlink"));
+    }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");
         auto write=[](const QString &p,const QByteArray &data) { QFile f(p); if (!f.open(QIODevice::WriteOnly)) return false; return f.write(data)==data.size(); };

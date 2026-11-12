@@ -96,18 +96,11 @@ std::pair<bool,bool> Backend::listDevices() {
         cameras.append(d);
     }
     const auto microphones=QMediaDevices::audioInputs();
-    // A remembered source that isn't connected gives way to the default one, except mid-take,
-    // where losing it has to stop the recording.
-    auto connected=[](const auto &devices,const QString &id) {
-        return std::any_of(devices.begin(),devices.end(),[&](const auto &d) { return deviceId(d.id())==id; });
-    };
-    if (!m_writer && !cameras.isEmpty() && !connected(cameras,m_cameraId)) {
-        const auto preferred=QMediaDevices::defaultVideoInput();
-        m_cameraId=deviceId((cameras.contains(preferred) ? preferred : cameras.first()).id());
-    }
-    if (!m_writer && !microphones.isEmpty() && m_audioId!="none" && !connected(microphones,m_audioId)) {
-        const auto preferred=QMediaDevices::defaultAudioInput();
-        m_audioId=deviceId((microphones.contains(preferred) ? preferred : microphones.first()).id());
+    // Mid-take, a missing source has to stop the recording rather than be replaced.
+    if (!m_writer) {
+        auto ids=[](const auto &devices) { QStringList result; for(const auto &d:devices) result<<deviceId(d.id()); return result; };
+        m_cameraId=media::chooseSource(ids(cameras),deviceId(QMediaDevices::defaultVideoInput().id()),m_cameraId);
+        if (m_audioId!="none") m_audioId=media::chooseSource(ids(microphones),deviceId(QMediaDevices::defaultAudioInput().id()),m_audioId);
     }
     auto label=[](const auto &device,const auto &all) {
         int count=0;
