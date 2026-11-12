@@ -162,6 +162,9 @@ QtObject {
         QTest::keyClick(window,Qt::Key_X); QCOMPARE(clips().size(),1);
         bar->setProperty("playheadSec",40); QTest::keyClick(window,Qt::Key_Space,Qt::ControlModifier);
         QCOMPARE(clips()[0].toMap()["start"].toDouble(),40.0);
+        bar->setProperty("playheadSec",70); QTest::keyClick(window,Qt::Key_Space,Qt::ControlModifier|Qt::ShiftModifier);
+        QCOMPARE(clips()[0].toMap()["start"].toDouble(),40.0); QCOMPARE(clips()[0].toMap()["end"].toDouble(),70.0);
+        QMetaObject::invokeMethod(backend.data(),"setClip",Q_ARG(QVariant,0),Q_ARG(QVariant,40.0),Q_ARG(QVariant,84.0));
         bar->setProperty("playheadSec",0); QTest::keyClick(window,Qt::Key_BracketRight);
         QCOMPARE(bar->property("playheadSec").toDouble(),30.0);
         // Mouse: double-click inside the clip splits it; double-click the split joins it again.
@@ -192,6 +195,12 @@ QtObject {
         QVERIFY(window->mouseGrabberItem()); window->mouseGrabberItem()->ungrabMouse();
         QCOMPARE(backend->property("gestures").toInt(),0); QVERIFY(!bar->property("interacting").toBool());
         QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,handle);
+        // A drag that ends off the bar leaves nothing hovered: no exit follows to clear it.
+        auto *area=bar->findChild<QObject*>("timelineArea"); QVERIFY(area);
+        QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
+        const QPoint below(handle.x()+40,barOrigin.y()+int(bar->height())+80);
+        QTest::mouseMove(window,below); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,below);
+        QCOMPARE(area->property("clipHovered").toInt(),-1); QVERIFY(!area->property("onHandle").toBool());
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
         QCOMPARE(clips().size(),1);
         backend->setProperty("state","recording");

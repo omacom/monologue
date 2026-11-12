@@ -23,5 +23,5 @@ struct Probe { bool ok = false; QString error; QSize size; double duration = 0; 
 Probe probe(const QString &path);
 // Re-encodes the kept ranges of a recording into one MP4, reporting progress on stdout.
 QStringList exportArgs(const QString &source, const QString &destination, const QList<edit::Range> &kept, bool audio);
-QImage thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel);
+QImage thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel = nullptr);
 }
