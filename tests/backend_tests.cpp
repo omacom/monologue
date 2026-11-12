@@ -113,12 +113,12 @@ private slots:
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");
         auto write=[](const QString &p,const QByteArray &data) { QFile f(p); if (!f.open(QIODevice::WriteOnly)) return false; return f.write(data)==data.size(); };
         QVERIFY(write(d.filePath("one/colors.toml"),"accent = '#123456' # comment\n"));
-        QVERIFY(write(d.filePath("two/colors.toml"),"accent = \"#fefefe\"\n"));
+        QVERIFY(write(d.filePath("two/colors.toml"),"mode = \"light\"\naccent = \"#fefefe\"\n"));
         QVERIFY(QFile::link(d.filePath("one"),d.filePath("current/theme")));
-        Theme theme(d.filePath("current")); QCOMPARE(theme.accent(),QString("#123456")); QCOMPARE(theme.foreground(),QString("white"));
+        Theme theme(d.filePath("current")); QCOMPARE(theme.accent(),QString("#123456")); QCOMPARE(theme.foreground(),QString("white")); QVERIFY(!theme.light());
         QVERIFY(QFile::remove(d.filePath("current/theme"))); QVERIFY(QFile::link(d.filePath("two"),d.filePath("current/theme")));
-        QTRY_COMPARE(theme.accent(),QString("#fefefe")); QCOMPARE(theme.foreground(),QString("black"));
-        QVERIFY(write(d.filePath("two/colors.toml"),"accent = '#333333'\n")); QTRY_COMPARE(theme.accent(),QString("#333333"));
+        QTRY_COMPARE(theme.accent(),QString("#fefefe")); QCOMPARE(theme.foreground(),QString("black")); QVERIFY(theme.light());
+        QVERIFY(write(d.filePath("two/colors.toml"),"accent = '#333333'\n")); QTRY_COMPARE(theme.accent(),QString("#333333")); QVERIFY(!theme.light());
         QVERIFY(QFile::remove(d.filePath("two/colors.toml"))); QTRY_COMPARE(theme.accent(),QString("#FFD60A"));
     }
     void liveRounding() {
