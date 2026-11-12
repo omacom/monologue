@@ -68,12 +68,14 @@ void Backend::setPreview(QObject *sink) {
     if (m_preview && m_lastFrame.isValid()) m_preview->setVideoFrame(m_lastFrame);
 }
 void Backend::refreshDevices() {
+    const auto camera=m_cameraId, audio=m_audioId;
     const auto [cameraMissing,audioMissing]=listDevices();
+    const bool switched=camera!=m_cameraId || audio!=m_audioId;
     if(m_writer) {
         if(cameraMissing || audioMissing) sourceFailed(tr("A selected source was disconnected, so the take was stopped."));
     } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
         // Do not reopen healthy devices when an unrelated input is plugged in.
-        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
+        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing || switched) activateSources();
     }
 }
 void Backend::retranslate() {
@@ -94,11 +96,19 @@ std::pair<bool,bool> Backend::listDevices() {
         cameras.append(d);
     }
     const auto microphones=QMediaDevices::audioInputs();
-    if (m_cameraId.isEmpty() && !cameras.isEmpty()) {
+    // A remembered source that isn't connected gives way to the default one, except mid-take,
+    // where losing it has to stop the recording.
+    auto connected=[](const auto &devices,const QString &id) {
+        return std::any_of(devices.begin(),devices.end(),[&](const auto &d) { return deviceId(d.id())==id; });
+    };
+    if (!m_writer && !cameras.isEmpty() && !connected(cameras,m_cameraId)) {
         const auto preferred=QMediaDevices::defaultVideoInput();
         m_cameraId=deviceId((cameras.contains(preferred) ? preferred : cameras.first()).id());
     }
-    if (m_audioId.isEmpty() && !microphones.isEmpty()) m_audioId=deviceId(QMediaDevices::defaultAudioInput().id());
+    if (!m_writer && !microphones.isEmpty() && m_audioId!="none" && !connected(microphones,m_audioId)) {
+        const auto preferred=QMediaDevices::defaultAudioInput();
+        m_audioId=deviceId((microphones.contains(preferred) ? preferred : microphones.first()).id());
+    }
     auto label=[](const auto &device,const auto &all) {
         int count=0;
         for(const auto &other:all) if(other.description()==device.description()) ++count;
