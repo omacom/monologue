@@ -11,8 +11,10 @@ ApplicationWindow {
     minimumWidth: 720; minimumHeight: 460
     visible: true
     title: "monologue"
-    color: "#0e0e10"
-    Material.theme: Material.Dark
+    // The chrome follows the Omarchy theme's light or dark mode; the camera picture and what sits on it stay dark.
+    color: win.light ? "#f4f4f5" : "#0e0e10"
+    Material.theme: win.light ? Material.Light : Material.Dark
+    readonly property bool light: theme.light
     Material.accent: theme.accent
     readonly property color accent: theme.accent
     readonly property color accentForeground: theme.foreground
@@ -156,9 +158,18 @@ ApplicationWindow {
     Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
     Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
-    readonly property color textColor: "#eeeef0"
-    readonly property color dimColor: "#8d8d96"
-    readonly property color faintColor: "#5c5c64"
+    readonly property color textColor: light ? "#18181b" : "#eeeef0"
+    readonly property color strongColor: light ? "#000000" : "#ffffff"
+    readonly property color dimColor: light ? "#63636b" : "#8d8d96"
+    readonly property color faintColor: light ? "#a1a1aa" : "#5c5c64"
+    readonly property color surfaceColor: light ? "#ffffff" : "#202023"
+    readonly property color borderColor: light ? "#d4d4d8" : "#39393e"
+    readonly property color controlColor: light ? "#e4e4e7" : "#2c2c2f"
+    readonly property color controlHoverColor: light ? "#d4d4d8" : "#3a3a3e"
+    readonly property color flatHoverColor: light ? "#e9e9ec" : "#1f1f23"
+    readonly property color roundColor: light ? "#e4e4e7" : "#26262a"
+    readonly property color roundHoverColor: light ? "#d4d4d8" : "#34343a"
+    readonly property color trackColor: light ? "#d4d4d8" : "#2a2a2e"
     readonly property color recordColor: "#f0605c"
     readonly property var icons: ({
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
@@ -211,7 +222,7 @@ ApplicationWindow {
         }
         background: Rectangle {
             radius: win.cornerRadius; clip: true
-            color: button.progress >= 0 ? "#2c2c2f" : button.primary ? win.accent : button.flat ? (button.hovered ? "#1f1f23" : "transparent") : button.hovered ? "#3a3a3e" : "#2c2c2f"
+            color: button.progress >= 0 ? win.controlColor : button.primary ? win.accent : button.flat ? (button.hovered ? win.flatHoverColor : "transparent") : button.hovered ? win.controlHoverColor : win.controlColor
             opacity: button.enabled ? 1 : .4
             border.width: button.activeFocus ? 2 : 0; border.color: button.primary ? win.accentForeground : win.accent
             Rectangle {
@@ -230,10 +241,10 @@ ApplicationWindow {
         focus: true
         Material.roundedScale: win.cornerRadius
         Material.elevation: 0
-        background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.color: "#39393e" }
+        background: Rectangle { color: win.surfaceColor; radius: win.cornerRadius; border.color: win.borderColor }
         Overlay.modal: Rectangle { color: "#99000000" }
         header: Label {
-            text: dialog.title; color: "#eeeef0"; font.pixelSize: 22
+            text: dialog.title; color: win.textColor; font.pixelSize: 22
             padding: 24; bottomPadding: 0; elide: Text.ElideRight
         }
         footer: DialogButtonBox {
@@ -265,12 +276,12 @@ ApplicationWindow {
             Label {
                 Layout.maximumWidth: choice.maximumTextWidth; elide: Text.ElideRight; font: choice.font
                 text: choice.displayText
-                color: choice.activeFocus ? win.accent : choice.enabled ? (choice.hovered ? "#ffffff" : win.textColor) : win.dimColor
+                color: choice.activeFocus ? win.accent : choice.enabled ? (choice.hovered ? win.strongColor : win.textColor) : win.dimColor
             }
             Icon { visible: choice.enabled; path: win.icons.chevron; implicitWidth: 12; implicitHeight: 12; color: win.dimColor }
         }
         popup.width: Math.max(280, choice.width)
-        popup.background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.color: "#39393e" }
+        popup.background: Rectangle { color: win.surfaceColor; radius: win.cornerRadius; border.color: win.borderColor }
         ToolTip {
             visible: choice.hovered && choice.currentText !== ""
             text: choice.detail !== "" ? choice.currentText + "\n" + choice.detail : choice.currentText
@@ -304,7 +315,7 @@ ApplicationWindow {
         opacity: enabled ? 1 : .4
         Rectangle {
             anchors.fill: parent; radius: width / 2
-            color: win.finished ? (shutter.hovered ? "#34343a" : "#26262a") : "transparent"
+            color: win.finished ? (shutter.hovered ? win.roundHoverColor : win.roundColor) : "transparent"
             border.width: win.finished ? (shutter.activeFocus ? 2 : 0) : 3
             border.color: shutter.activeFocus ? win.accent : shutter.recording ? win.recordColor : win.textColor
         }
@@ -347,6 +358,7 @@ ApplicationWindow {
                 visible: backend.state === "unavailable" || backend.state === "starting"
                 Label {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 15
+                    color: "#eeeef0"
                     text: backend.state === "starting" ? qsTr("Connecting your camera and microphone…") : backend.message
                 }
                 ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: qsTr("Retry"); onClicked: backend.retry() }
@@ -364,14 +376,14 @@ ApplicationWindow {
             visible: !win.finished && backend.state !== "finalizing"
             Layout.fillWidth: true; implicitHeight: 5; z: 1
             Rectangle {
-                id: meter; anchors.fill: parent; color: "#2a2a2e"
+                id: meter; anchors.fill: parent; color: win.trackColor
                 readonly property real fraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.level + 60) / 60)) : 0
                 readonly property real peakFraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.peakLevel + 60) / 60)) : 0
                 Rectangle {
                     width: meter.fraction * parent.width; height: parent.height
-                    color: backend.clipping || backend.level >= -3 ? win.recordColor : backend.level >= -12 ? "#e2c77c" : "#8fc38a"
+                    color: backend.clipping || backend.level >= -3 ? win.recordColor : backend.level >= -12 ? (win.light ? "#c9a227" : "#e2c77c") : (win.light ? "#5f9e59" : "#8fc38a")
                 }
-                Rectangle { visible: meter.peakFraction > 0; x: meter.peakFraction * (parent.width - width); width: 2; height: parent.height; color: backend.clipping ? win.recordColor : "#c9c9d0" }
+                Rectangle { visible: meter.peakFraction > 0; x: meter.peakFraction * (parent.width - width); width: 2; height: parent.height; color: backend.clipping ? win.recordColor : win.light ? "#52525b" : "#c9c9d0" }
                 Accessible.role: Accessible.Indicator
                 Accessible.name: qsTr("Microphone level: %1").arg(backend.meterText)
             }
@@ -385,7 +397,7 @@ ApplicationWindow {
                 id: finishing; objectName: "finishingStrip"
                 visible: backend.state === "finalizing"
                 anchors.fill: parent; anchors.topMargin: 3; anchors.bottomMargin: 3
-                radius: Math.min(6, win.cornerRadius); color: "#1c1c1e"; clip: true
+                radius: Math.min(6, win.cornerRadius); color: win.light ? "#e4e4e7" : "#1c1c1e"; clip: true
                 Rectangle {
                     id: sweep
                     width: parent.width / 4; height: 2; anchors.bottom: parent.bottom
@@ -472,7 +484,7 @@ ApplicationWindow {
                         Accessible.name: paused ? qsTr("Resume") : qsTr("Pause")
                         ToolTip.visible: hovered; ToolTip.text: paused ? qsTr("Resume (Space)") : qsTr("Pause (Space)")
                         background: Rectangle {
-                            radius: width / 2; color: pauseButton.hovered ? "#34343a" : "#26262a"
+                            radius: width / 2; color: pauseButton.hovered ? win.roundHoverColor : win.roundColor
                             border.width: pauseButton.activeFocus ? 2 : 0; border.color: win.accent
                         }
                         contentItem: Item {
@@ -606,7 +618,7 @@ ApplicationWindow {
         onRejected: backend.confirmOverwrite(false)
     }
     ThemedDialog {
-        id: helpDialog; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
+        id: helpDialog; objectName: "helpDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
         RowLayout {
             LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 40
