@@ -78,7 +78,8 @@ private slots:
         const auto jpeg=file.readAll();
         auto complete=[](const QByteArray &bytes) { return media::completeJpeg(reinterpret_cast<const uchar*>(bytes.constData()),bytes.size()); };
         QVERIFY(complete(jpeg));
-        QVERIFY(complete(jpeg+QByteArray(32,'\0')));
+        QVERIFY(complete(jpeg+QByteArray(64,'\0')));
+        QVERIFY(!complete(jpeg+QByteArray(65,'\0')));
         QVERIFY(!complete(jpeg.left(jpeg.size()*2/3)));
         QVERIFY(!complete(QByteArray("\xFF\xD9",2)));
         const auto frame=[](const QByteArray &bytes) { return QVideoFrame(std::make_unique<JpegBuffer>(bytes,QSize(320,240))); };

@@ -75,7 +75,8 @@ QString media::chooseSource(const QStringList &connected, const QString &preferr
 bool media::completeJpeg(const uchar *data, qsizetype size) {
     if (size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
     // Some cameras pad the buffer past EOI, so look for it near the end rather than at it.
-    for (qsizetype i = size - 2; i >= std::max<qsizetype>(2, size - 64); --i)
+    // Up to 64 bytes of padding: EOI may start 66 bytes before the end.
+    for (qsizetype i = size - 2; i >= std::max<qsizetype>(2, size - 66); --i)
         if (data[i] == 0xFF && data[i + 1] == 0xD9) return true;
     return false;
 }
