@@ -82,10 +82,19 @@ void media::useFfmpeg() {
 }
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
+    auto usable = [](const Format &f) {
+        return !f.size.isEmpty() && f.maxFps > 0 && f.minFps <= f.maxFps;
+    };
+    // 15 fps is the slowest rate this ranking still treats as video: a 4K mode
+    // at 15 beats 1080p at 30. Anything slower is a still size, and a webcam can
+    // list one of those above the mode it can actually stream.
+    bool videoRate = false;
+    for (const auto &f : formats)
+        if (usable(f) && f.maxFps >= 15) { videoRate = true; break; }
     int best = -1;
     for (int i = 0; i < formats.size(); ++i) {
         const auto &f = formats[i];
-        if (f.size.isEmpty() || f.maxFps <= 0 || f.minFps > f.maxFps) continue;
+        if (!usable(f) || (videoRate && f.maxFps < 15)) continue;
         if (best < 0) { best = i; continue; }
         const auto &b = formats[best];
         const qint64 area = qint64(f.size.width()) * f.size.height();
