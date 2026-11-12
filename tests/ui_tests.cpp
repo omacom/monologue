@@ -39,6 +39,7 @@ QtObject {
     property real peakLevel: -6
     property bool clipping: false
     property string meterText: "−9 dBFS"
+    property bool mirror: true
     property url clip: ""
     property string clipName: "Monologue-2026-09-17.mp4"
     property real saveProgress: 0
@@ -63,6 +64,7 @@ QtObject {
     function setPreview(sink) {}
     function toggleRecording() { toggles++; state = state === "ready" || state === "paused" ? "recording" : "paused"; changed() }
     function finish() { state = "finished"; changed() }
+    function setMirror(value) { mirror = value; changed() }
     function selectCamera(i) {}
     function selectMicrophone(i) {}
     function newRecording() { newRecordings++; state = "ready"; changed() }
@@ -112,6 +114,19 @@ QtObject {
         const auto picture=window->grabWindow(); QVERIFY(picture.pixelColor(picture.width()/2,40).lightness()<20);
         QVERIFY(write(themeDir.filePath("theme/colors.toml"),"accent = \"#FFD60A\"\n"));
         QTRY_VERIFY(window->color().lightness()<40);
+        // The preview is mirrored by default; the button and M turn it off and on again.
+        auto *live=window->findChild<QQuickItem*>("liveVideo"); QVERIFY(live);
+        auto *mirror=window->findChild<QQuickItem*>("mirrorButton"); QVERIFY(mirror);
+        QVERIFY(live->property("mirrored").toBool()); QVERIFY(mirror->isVisible());
+        // Hovering explains it.
+        QTest::mouseMove(window,mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint());
+        auto *tip=window->findChild<QObject*>("mirrorTip"); QVERIFY(tip);
+        QTRY_VERIFY(tip->property("visible").toBool());
+        QCOMPARE(tip->property("text").toString(),QString("Stop mirroring the preview (M)"));
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint());
+        QVERIFY(!backend->property("mirror").toBool()); QVERIFY(!live->property("mirrored").toBool());
+        QTRY_VERIFY(live->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(backend->property("mirror").toBool()); QVERIFY(live->property("mirrored").toBool());
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("paused"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));

@@ -156,6 +156,7 @@ ApplicationWindow {
     Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
     Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
+    Shortcut { sequence: "M"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.finished && !win.overlayOpen; onActivated: backend.setMirror(!backend.mirror) }
     Shortcut { sequences: ["Q", "Ctrl+Q", "Ctrl+W"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
     Shortcut { sequences: ["?", "F1", "Ctrl+?"]; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
@@ -176,6 +177,7 @@ ApplicationWindow {
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
         microphone: "M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21",
         chevron: "M6 9l6 6 6-6",
+        mirror: "M3 7l5 5-5 5z M21 7l-5 5 5 5z M12 20v2 M12 14v2 M12 8v2 M12 2v2",
         back: "M4 12a8 8 0 1 0 2.4-5.7 M4 4v4.5h4.5",
         play: "M8 4.5v15l12.5-7.5z",
         pause: "M7 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z M15 4.5h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1z"
@@ -369,7 +371,7 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
-            VideoOutput { id: liveVideo; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true }
+            VideoOutput { id: liveVideo; objectName: "liveVideo"; anchors.fill: parent; visible: !win.finished; fillMode: VideoOutput.PreserveAspectFit; focus: true; mirrored: backend.mirror }
             // Hold the last frame at the end of the file rather than clearing to black.
             VideoOutput { id: clipVideo; objectName: "clipVideo"; endOfStreamPolicy: VideoOutput.KeepLastFrame; anchors.fill: parent; visible: win.finished; fillMode: VideoOutput.PreserveAspectFit }
             MouseArea { anchors.fill: parent; onClicked: { liveVideo.forceActiveFocus(); if (win.finished) win.togglePlayback() } }
@@ -527,6 +529,33 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 8
                 Item { Layout.fillWidth: true }
+                // Quiet on purpose: a preference, not part of recording. Brighter while mirrored.
+                RoundButton {
+                    id: mirrorButton; objectName: "mirrorButton"
+                    visible: !win.finished
+                    // Implicit size, since the row layout ignores width and height.
+                    implicitWidth: 36; implicitHeight: 36; padding: 0; flat: true
+                    focusPolicy: Qt.TabFocus; hoverEnabled: true
+                    Accessible.name: backend.mirror ? qsTr("Stop mirroring the preview") : qsTr("Mirror the preview")
+                    // The glyph's right edge lines up with where the camera and microphone icons start on the left.
+                    Layout.rightMargin: -2
+                    ToolTip {
+                        objectName: "mirrorTip"; visible: mirrorButton.hovered
+                        text: (backend.mirror ? qsTr("Stop mirroring the preview") : qsTr("Mirror the preview")) + " (M)"
+                    }
+                    background: Rectangle {
+                        radius: width / 2; color: mirrorButton.hovered ? win.roundHoverColor : "transparent"
+                        border.width: mirrorButton.activeFocus ? 2 : 0; border.color: win.accent
+                    }
+                    contentItem: Item {
+                        Icon {
+                            anchors.centerIn: parent; width: 20; height: 20; path: win.icons.mirror
+                            color: mirrorButton.hovered ? win.strongColor : backend.mirror ? win.dimColor : win.faintColor
+                        }
+                    }
+                    onClicked: { backend.setMirror(!backend.mirror); liveVideo.forceActiveFocus() }
+                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                }
                 ActionButton {
                     objectName: "saveButton"
                     readonly property bool saving: backend.state === "saving"
@@ -651,7 +680,7 @@ ApplicationWindow {
             spacing: 40
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Recording")
-                rows: [["Space", qsTr("Record / pause / resume")], ["Enter", qsTr("Stop and edit")], ["Esc", qsTr("Discard and start over")], ["Q", qsTr("Quit (Ctrl+Q, Ctrl+W)")], ["?", qsTr("Show shortcuts (F1)")]]
+                rows: [["Space", qsTr("Record / pause / resume")], ["Enter", qsTr("Stop and edit")], ["Esc", qsTr("Discard and start over")], ["M", qsTr("Mirror the preview")], ["Q", qsTr("Quit (Ctrl+Q, Ctrl+W)")], ["?", qsTr("Show shortcuts (F1)")]]
             }
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Editing")
