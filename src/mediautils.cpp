@@ -153,10 +153,16 @@ QStringList media::exportArgs(const QString &source, const QString &destination,
          << "-movflags" << "+faststart" << "-f" << "mp4" << destination;
     return args;
 }
-QImage media::thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel) {
+namespace {
+// The frame at time, or with before, the last frame in the before seconds up to it:
+// decoded in order, then reversed to take the last.
+QImage frameAt(const QString &path, double time, int height, double before, const std::atomic<bool> *cancel) {
+    QStringList args{"-nostdin", "-loglevel", "error", "-ss", QString::number(std::max(time - before, 0.0), 'f', 3)};
+    if (before > 0) args << "-t" << QString::number(std::min(before, time), 'f', 3);
+    args << "-i" << path << "-frames:v" << "1" << "-vf" << QString("scale=-2:%1%2").arg(height).arg(before > 0 ? ",reverse" : "")
+         << "-f" << "image2pipe" << "-vcodec" << "mjpeg" << "pipe:1";
     QProcess process;
-    process.start("ffmpeg", {"-nostdin", "-loglevel", "error", "-ss", QString::number(std::max(time, 0.0), 'f', 3), "-i", path,
-                             "-frames:v", "1", "-vf", QString("scale=-2:%1").arg(height), "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1"});
+    process.start("ffmpeg", args);
     // Poll, so a cancelled strip kills ffmpeg promptly instead of blocking on it.
     while (!process.waitForFinished(50)) {
         if (process.state() == QProcess::NotRunning) break;
@@ -165,5 +171,18 @@ QImage media::thumbnail(const QString &path, double time, int height, const std:
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return {};
     QImage image;
     image.loadFromData(process.readAllStandardOutput(), "JPEG");
+    return image;
+}
+}
+QImage media::thumbnail(const QString &path, double time, int height, const std::atomic<bool> *cancel) {
+    QImage image = frameAt(path, time, height, 0, cancel);
+    // Past the last frame, which the picture can end before the file does (audio
+    // runs on, or the camera stalled), ffmpeg gives nothing: show the last frame
+    // before then rather than a blank. A second back covers any ordinary frame
+    // rate; 30 s, a picture that stopped well before the end. As Omacut does.
+    for (double before : {1.0, 30.0}) {
+        if (!image.isNull() || time <= 0 || (cancel && cancel->load(std::memory_order_relaxed))) break;
+        image = frameAt(path, time, height, before, cancel);
+    }
     return image;
 }

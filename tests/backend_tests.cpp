@@ -109,6 +109,24 @@ private slots:
         QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
         QVERIFY(QFile::exists(dir.filePath("copy with spaces.mp4")));
     }
+    void thumbnailPastTheLastFrameShowsTheLastOne() {
+        // Past a video's last frame ffmpeg finds nothing, which left the filmstrip
+        // blank at the end. At a frame a second the last of 3 s is at 2 s; at one
+        // every 5 s, the last of 10 s is at 5 s, too far back for a second's step.
+        QTemporaryDir dir;
+        auto video=[&](const QString &name,const QString &rate,int duration) {
+            const auto path=dir.filePath(name); QProcess p;
+            p.start("ffmpeg",{"-v","error","-f","lavfi","-i",QString("testsrc=size=32x32:rate=%1:duration=%2").arg(rate).arg(duration),"-pix_fmt","yuv420p",path});
+            return p.waitForFinished(20000) && p.exitCode()==0 ? path : QString();
+        };
+        const auto perSecond=video("slow.mp4","1",3), perFive=video("slower.mp4","1/5",10);
+        QVERIFY(!perSecond.isEmpty() && !perFive.isEmpty());
+        const auto last=media::thumbnail(perSecond,2.0,36);
+        QVERIFY(!last.isNull()); QVERIFY(media::thumbnail(perSecond,1.0,36)!=last);
+        QCOMPARE(media::thumbnail(perSecond,2.9,36),last);
+        QCOMPARE(media::thumbnail(perFive,9.9,36),media::thumbnail(perFive,5.0,36));
+        QVERIFY(media::thumbnail(perFive,9.9,36)!=media::thumbnail(perFive,0.0,36));
+    }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");
         auto write=[](const QString &p,const QByteArray &data) { QFile f(p); if (!f.open(QIODevice::WriteOnly)) return false; return f.write(data)==data.size(); };
