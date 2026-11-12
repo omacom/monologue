@@ -121,7 +121,7 @@ private:
     void readAudio();
     void receiveAudio(const QByteArray &data, qint64 capturedAt);
     void finishWhenCaptured();
-    void receiveVideo(const QVideoFrame &frame);
+    void receiveVideo(QVideoFrame frame);
     void tick();
     void sourceFailed(const QString &message);
     void startTake();
@@ -148,6 +148,7 @@ private:
     QAudioFormat m_audioFormat;
     QVideoFrame m_lastFrame;
     QCameraFormat m_cameraFormat;
+    QVideoFrameFormat::ColorSpace m_colorSpace = QVideoFrameFormat::ColorSpace_Undefined;
     QElapsedTimer m_wall;
     QTimer m_tick;
     QTimer m_finishTimeout;

@@ -1,3 +1,4 @@
+#include <linux/videodev2.h>
 #include <QtTest>
 #include <QScopeGuard>
 #include <cstring>
@@ -62,6 +63,20 @@ private slots:
         f.append({{3840,2160},30,60,0}); QCOMPARE(media::bestFormat(f),3);
         QCOMPARE(media::bestFormat({}),-1);
         QCOMPARE(media::targetFps(15,15),15.0);
+    }
+    void cameraColorSpace() {
+        // Cam Link 4K: sRGB colorspace, explicit BT.709 encoding.
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_SRGB,V4L2_YCBCR_ENC_709),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_SRGB,V4L2_YCBCR_ENC_DEFAULT),QVideoFrameFormat::ColorSpace_BT601);
+        QCOMPARE(media::colorSpace(V4L2_COLORSPACE_REC709,V4L2_YCBCR_ENC_DEFAULT),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(media::cameraColorSpace("/nonexistent"),QVideoFrameFormat::ColorSpace_Undefined);
+        QImage image(4,4,QImage::Format_RGB32);
+        auto format=QVideoFrame(image).surfaceFormat(); format.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
+        QVideoFrame source(image); source.setStartTime(1234); source.setEndTime(5678);
+        const auto frame=media::withFormat(source,format);
+        QCOMPARE(frame.surfaceFormat().colorSpace(),QVideoFrameFormat::ColorSpace_BT709);
+        QCOMPARE(frame.startTime(),1234); QCOMPARE(frame.endTime(),5678);
+        QCOMPARE(frame.toImage().size(),QSize(4,4));
     }
     void clockExcludesPauses() {
         TakeClock c; c.start(1000000);
@@ -454,6 +469,30 @@ private slots:
         QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
         const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
         QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,qPrintable(rgb.toHex()));
+    }
+    void relabelledCameraRecordsItsColorSpace() {
+        // A Cam Link sends packed 4:2:2 that Qt labels BT.601; once relabelled from
+        // the driver's BT.709, the 4:2:0 recording must carry BT.709 too.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("709.mp4");
+        QVideoFrameFormat yuyv(QSize(320,240),QVideoFrameFormat::Format_YUYV);
+        auto bt709=yuyv; bt709.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
+        QAudioFormat audio; audio.setSampleRate(48000); audio.setChannelCount(1); audio.setSampleFormat(QAudioFormat::Int16);
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,bt709,30,audio,0));
+        for(int i=0;i<30;++i) {
+            QVideoFrame frame(yuyv); QVERIFY(frame.map(QVideoFrame::WriteOnly));
+            for(int y=0;y<240;++y) { auto *row=frame.bits(0)+y*frame.bytesPerLine(0); for(int x=0;x<320*2;x+=4) { row[x]=row[x+2]=128; row[x+1]=60; row[x+3]=200; } }
+            frame.unmap();
+            writer.video(media::withFormat(frame,bt709),qRound64(i*1000000.0/30));
+            writer.audio(QByteArray(1600*2,0),qRound64(i*1000000.0/30));
+            QTest::qWait(33);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess probe; probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,color_space","-of","csv=p=0",path});
+        QVERIFY(probe.waitForFinished());
+        QCOMPARE(QString::fromUtf8(probe.readAllStandardOutput()).trimmed(),QString("yuv420p,bt709"));
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;

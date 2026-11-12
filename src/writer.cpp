@@ -1,6 +1,7 @@
 #include "writer.h"
 #include <QMediaFormat>
 #include <QUrl>
+#include "mediautils.h"
 #include <QAbstractVideoBuffer>
 #include <QImage>
 #include <limits>
@@ -9,32 +10,6 @@
 #include <turbojpeg.h>
 
 namespace {
-// QVideoFrame copies share timestamp metadata as well as pixels. Give recording
-// frames independent metadata without copying their image planes or altering
-// the live preview (or an already queued copy of a pause's final frame).
-class FrameBuffer : public QAbstractVideoBuffer {
-public:
-    explicit FrameBuffer(const QVideoFrame &source) : m_source(source) {}
-    ~FrameBuffer() override { unmap(); }
-    QVideoFrameFormat format() const override { return m_source.surfaceFormat(); }
-    MapData map(QVideoFrame::MapMode mode) override {
-        MapData result;
-        if(!m_source.map(mode)) return result;
-        m_mapped=true;
-        result.planeCount=m_source.planeCount();
-        for(int i=0;i<result.planeCount;++i) {
-            result.data[i]=m_source.bits(i);
-            result.bytesPerLine[i]=m_source.bytesPerLine(i);
-            result.dataSize[i]=m_source.mappedBytes(i);
-        }
-        return result;
-    }
-    void unmap() override { if(m_mapped) { m_source.unmap(); m_mapped=false; } }
-private:
-    QVideoFrame m_source;
-    bool m_mapped=false;
-};
-
 // Qt chooses the encoder's input format from the source frame's. For RGB it
 // asks for 12-bit 4:4:4 and for packed 4:2:2 for 10-bit 4:2:2, both of which
 // H.264 NVENC rejects; Qt then falls back to software x264 at 4:4:4 or 4:2:2,
@@ -327,7 +302,8 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     if (Yuv420FrameBuffer::converts(frame.pixelFormat()))
         frame = QVideoFrame(std::make_unique<Yuv420FrameBuffer>(frame));
     else
-        frame = QVideoFrame(std::make_unique<FrameBuffer>(frame));
+        // Independent timestamps for the recording copy, without touching the preview's frame.
+        frame = media::withFormat(frame, frame.surfaceFormat());
     frame.setStartTime(timestamp);
     frame.setEndTime(qRound64((frameIndex + 1) * 1000000.0 / m_fps));
     frame.setStreamFrameRate(m_fps);

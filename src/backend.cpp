@@ -170,8 +170,16 @@ void Backend::updateReady() {
         m_state="ready"; m_message.clear(); emit changed();
     }
 }
-void Backend::receiveVideo(const QVideoFrame &frame) {
+void Backend::receiveVideo(QVideoFrame frame) {
     if(!m_camera || !frame.isValid()) return;
+    // Qt maps V4L2's sRGB colorspace to BT.601 and ignores the YCbCr encoding the
+    // driver reports, so HDMI capture cards sending BT.709 decode with skewed colors.
+    if(!m_cameraHealthy) m_colorSpace=media::cameraColorSpace(m_camera->cameraDevice().id());
+    if(frame.surfaceFormat().colorSpace()==QVideoFrameFormat::ColorSpace_BT601 &&
+       m_colorSpace!=QVideoFrameFormat::ColorSpace_Undefined && m_colorSpace!=QVideoFrameFormat::ColorSpace_BT601) {
+        auto format=frame.surfaceFormat(); format.setColorSpace(m_colorSpace);
+        frame=media::withFormat(frame,format);
+    }
     m_lastVideoAt=now();
     if(frame.size()!=m_cameraFormat.resolution()) {
         sourceFailed(tr("The camera did not provide its maximum resolution. Choose another source or Retry.")); return;
