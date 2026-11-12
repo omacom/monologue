@@ -10,6 +10,7 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include "theme.h"
+#include "mediautils.h"
 
 class UiTests : public QObject {
     Q_OBJECT
@@ -68,6 +69,8 @@ QtObject {
     function closeTake() {}
     function discardCurrent() { discards++; state = "ready"; changed() }
     function save() {}
+    property var overwriteAnswers: []
+    function confirmOverwrite(replace) { overwriteAnswers = overwriteAnswers.concat([replace]) }
     function split(t) {
         var next = []
         clips.forEach(c => { if (t > c.start && t < c.end) next.push({start: c.start, end: t}, {start: t, end: c.end}); else next.push(c) })
@@ -76,8 +79,9 @@ QtObject {
     function setClip(i, start, end) { var next = clips.slice(); next[i] = {start: start, end: end}; clips = next }
     function removeClip(i) { var next = clips.slice(); next.splice(i, 1); clips = next }
     function joinClips(i) { var next = clips.slice(); next[i] = {start: next[i].start, end: next[i + 1].end}; next.splice(i + 1, 1); clips = next }
-    function beginGesture() {}
-    function endGesture() {}
+    property int gestures: 0
+    function beginGesture() { gestures++ }
+    function endGesture() { gestures-- }
     function undo() { clips = [{start: 0, end: 84}]; canUndo = false }
     function redo() {}
     function retry() {}
@@ -96,6 +100,18 @@ QtObject {
         engine.load(QUrl("qrc:/Main.qml")); QVERIFY(!engine.rootObjects().isEmpty());
         auto *window=qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
         QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate(); QTest::qWait(100);
+        // The chrome follows a light Omarchy theme live, dialogs included, and goes back to dark; the camera area stays black.
+        auto *help=window->findChild<QObject*>("helpDialog"); QVERIFY(help);
+        auto helpBackground=[&] { return help->property("background").value<QQuickItem*>()->property("color").value<QColor>(); };
+        auto bottomBar=[&] { const auto image=window->grabWindow(); return image.pixelColor(4,image.height()-4); };
+        QVERIFY(window->color().lightness()<40 && bottomBar().lightness()<40 && helpBackground().lightness()<60);
+        QVERIFY(QDir().mkpath(themeDir.filePath("theme")));
+        QVERIFY(write(themeDir.filePath("theme/colors.toml"),"mode = \"light\"\naccent = \"#FFD60A\"\n"));
+        QTRY_VERIFY(window->color().lightness()>220);
+        QVERIFY(bottomBar().lightness()>220); QVERIFY(helpBackground().lightness()>220);
+        const auto picture=window->grabWindow(); QVERIFY(picture.pixelColor(picture.width()/2,40).lightness()<20);
+        QVERIFY(write(themeDir.filePath("theme/colors.toml"),"accent = \"#FFD60A\"\n"));
+        QTRY_VERIFY(window->color().lightness()<40);
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("paused"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
@@ -133,6 +149,13 @@ QtObject {
             QCOMPARE(backend->property("state").toString(),QString("ready"));
         }
         QCOMPARE(backend->property("discards").toInt(),3);
+        // A dialog's underlined letters pick its choices, alone or with Alt.
+        backend->setProperty("state","recording");
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(restart->property("opened").toBool());
+        QTest::keyClick(window,Qt::Key_C); QTRY_VERIFY(!restart->property("visible").toBool());
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(restart->property("opened").toBool());
+        QTest::keyClick(window,Qt::Key_D,Qt::AltModifier); QTRY_VERIFY(!restart->property("visible").toBool());
+        QCOMPARE(backend->property("discards").toInt(),4); QCOMPARE(backend->property("state").toString(),QString("ready"));
         QTest::keyClick(window,Qt::Key_Escape); QVERIFY(!restart->property("visible").toBool());
         QTest::keyClick(window,Qt::Key_Space);
         QCOMPARE(backend->property("state").toString(),QString("recording"));
@@ -149,6 +172,9 @@ QtObject {
         QTest::keyClick(window,Qt::Key_X); QCOMPARE(clips().size(),1);
         bar->setProperty("playheadSec",40); QTest::keyClick(window,Qt::Key_Space,Qt::ControlModifier);
         QCOMPARE(clips()[0].toMap()["start"].toDouble(),40.0);
+        bar->setProperty("playheadSec",70); QTest::keyClick(window,Qt::Key_Space,Qt::ControlModifier|Qt::ShiftModifier);
+        QCOMPARE(clips()[0].toMap()["start"].toDouble(),40.0); QCOMPARE(clips()[0].toMap()["end"].toDouble(),70.0);
+        QMetaObject::invokeMethod(backend.data(),"setClip",Q_ARG(QVariant,0),Q_ARG(QVariant,40.0),Q_ARG(QVariant,84.0));
         bar->setProperty("playheadSec",0); QTest::keyClick(window,Qt::Key_BracketRight);
         QCOMPARE(bar->property("playheadSec").toDouble(),30.0);
         // Mouse: double-click inside the clip splits it; double-click the split joins it again.
@@ -167,6 +193,24 @@ QtObject {
         // A double-click a few pixels from a pause mark splits exactly at the pause.
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+4,at60.y()));
         QCOMPARE(clips().size(),2); QCOMPARE(clips()[0].toMap()["end"].toDouble(),61.5);
+        // Pressing a clip's ×, then sliding off it before letting go, removes nothing and drags nothing.
+        const QPoint remove(xFor(61.5)-12-4-10,barOrigin.y()+17);
+        QTest::mouseMove(window,remove); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,remove);
+        QTest::mouseMove(window,remove-QPoint(40,0)); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,remove-QPoint(40,0));
+        QCOMPARE(clips().size(),2);
+        // A handle drag that loses its press, rather than being released, still ends the gesture.
+        const QPoint handle(xFor(0)+6,at60.y());
+        QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
+        QCOMPARE(backend->property("gestures").toInt(),1); QVERIFY(bar->property("interacting").toBool());
+        QVERIFY(window->mouseGrabberItem()); window->mouseGrabberItem()->ungrabMouse();
+        QCOMPARE(backend->property("gestures").toInt(),0); QVERIFY(!bar->property("interacting").toBool());
+        QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,handle);
+        // A drag that ends off the bar leaves nothing hovered: no exit follows to clear it.
+        auto *area=bar->findChild<QObject*>("timelineArea"); QVERIFY(area);
+        QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
+        const QPoint below(handle.x()+40,barOrigin.y()+int(bar->height())+80);
+        QTest::mouseMove(window,below); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,below);
+        QCOMPARE(area->property("clipHovered").toInt(),-1); QVERIFY(!area->property("onHandle").toBool());
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
         QCOMPARE(clips().size(),1);
         backend->setProperty("state","recording");
@@ -192,10 +236,31 @@ QtObject {
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
         QTRY_VERIFY(unsaved->property("opened").toBool());
         QCOMPARE(backend->property("newRecordings").toInt(),0);
-        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
-        QTest::keyClick(window,Qt::Key_Q); QTRY_VERIFY(unsaved->property("opened").toBool());
-        QCOMPARE(unsaved->property("action").toString(),QString("quit"));
-        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        // Save has focus, and Tab and the arrows wrap around the choices.
+        auto *unsavedSave=window->findChild<QQuickItem*>("unsavedSave"); QVERIFY(unsavedSave);
+        auto *unsavedDiscard=window->findChild<QQuickItem*>("unsavedDiscard"); QVERIFY(unsavedDiscard);
+        QTRY_VERIFY(unsavedSave->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Left); QVERIFY(unsavedDiscard->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Tab); QVERIFY(unsavedSave->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Right); QVERIFY(!unsavedSave->hasActiveFocus() && !unsavedDiscard->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_C); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        QCOMPARE(backend->property("newRecordings").toInt(),0);
+        for(const auto &quit:{QKeySequence("Q"),QKeySequence("Ctrl+Q"),QKeySequence("Ctrl+W")}) {
+            QTest::keySequence(window,quit); QTRY_VERIFY(unsaved->property("opened").toBool());
+            QCOMPARE(unsaved->property("action").toString(),QString("quit"));
+            QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        }
+        // Replacing an existing MP4: Replace has focus, R or Enter replaces, C or Esc keeps it, and S doesn't split behind the dialog.
+        auto *overwrite=window->findChild<QObject*>("overwriteDialog"); QVERIFY(overwrite);
+        const auto clipCount=clips().size();
+        for(const int key:{int(Qt::Key_Return),int(Qt::Key_R),int(Qt::Key_C),int(Qt::Key_Escape)}) {
+            QMetaObject::invokeMethod(backend.data(),"overwriteRequested",Q_ARG(QString,"/tmp/take.mp4"));
+            QTRY_VERIFY(overwrite->property("opened").toBool());
+            QTRY_VERIFY(window->findChild<QQuickItem*>("overwriteReplace")->hasActiveFocus());
+            QTest::keyClick(window,Qt::Key_S); QCOMPARE(clips().size(),clipCount);
+            QTest::keyClick(window,Qt::Key(key)); QTRY_VERIFY(!overwrite->property("visible").toBool());
+        }
+        QCOMPARE(backend->property("overwriteAnswers").toList(),QVariantList({true,true,false,false}));
         QVERIFY(window->isVisible());
         backend->setProperty("unsaved",false);
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
@@ -238,7 +303,12 @@ QtObject {
     }
 };
 int main(int argc,char**argv) {
-    qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    media::useFfmpeg();
+    // Offscreen however it's started, so a test never opens a window on the desktop.
+    qputenv("QT_QPA_PLATFORM","offscreen");
+    // Rendered the same with or without a GPU, and without the desktop's platform theme plugin.
+    qputenv("QT_QPA_PLATFORMTHEME","");
+    qputenv("QT_QUICK_BACKEND","software");
     QGuiApplication app(argc,argv); QQuickStyle::setStyle("Material");
     UiTests tests; return QTest::qExec(&tests,argc,argv);
 }

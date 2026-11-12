@@ -8,3 +8,4 @@ Terminal=false
 Categories=AudioVideo;Video;Recorder;
 Keywords=webcam;camera;record;video;
 StartupNotify=true
+StartupWMClass=monologue

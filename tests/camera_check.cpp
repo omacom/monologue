@@ -6,8 +6,9 @@
 #include <QDir>
 #include <QStandardPaths>
 #include "backend.h"
+#include "mediautils.h"
 int main(int argc,char**argv) {
-    qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    media::useFfmpeg();
     QGuiApplication app(argc,argv);
     app.setOrganizationName("omacom"); app.setApplicationName("monologue-camera-check");
     Backend backend;
