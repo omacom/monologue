@@ -626,7 +626,7 @@ ApplicationWindow {
         onAccepted: { player.stop(); backend.discardCurrent() }
     }
     ThemedDialog {
-        id: overwriteDialog; anchors.centerIn: parent; modal: true; title: qsTr("Replace the existing MP4?")
+        id: overwriteDialog; objectName: "overwriteDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Replace the existing MP4?")
         property string targetPath: ""
         width: Math.min(win.width-40,460)
         closePolicy: Popup.CloseOnEscape
@@ -638,7 +638,7 @@ ApplicationWindow {
             RowLayout {
                 Layout.alignment: Qt.AlignRight
                 ChoiceButton { markup: qsTr("<u>C</u>ancel"); onClicked: overwriteDialog.reject() }
-                ChoiceButton { id: overwriteReplace; markup: qsTr("<u>R</u>eplace"); primary: true; onClicked: overwriteDialog.accept() }
+                ChoiceButton { id: overwriteReplace; objectName: "overwriteReplace"; markup: qsTr("<u>R</u>eplace"); primary: true; onClicked: overwriteDialog.accept() }
             }
         }
         onAccepted: backend.confirmOverwrite(true)
