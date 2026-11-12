@@ -16,7 +16,7 @@ int main(int argc,char *argv[]) {
     app.setApplicationVersion("0.3.1");
     app.setOrganizationName("omacom");
     app.setDesktopFileName("monologue");
-    app.setWindowIcon(QIcon("qrc:/monologue.svg"));
+    app.setWindowIcon(QIcon(":/monologue.svg"));
     QQuickStyle::setStyle("Material");
     Theme theme;
     Backend backend;
