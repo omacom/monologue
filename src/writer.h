@@ -52,7 +52,8 @@ private:
     void fail(const QString &message);
     void appendAudio(const QByteArray &data);
     void padAudioTo(qint64 time);
-    void videoAt(QVideoFrame frame, qint64 position);
+    // fromCamera lets a jittered frame take the next free slot; the repeated tail frame must not.
+    void videoAt(QVideoFrame frame, qint64 position, bool fromCamera = false);
     QMediaCaptureSession m_session;
     QMediaRecorder m_recorder;
     QVideoFrameInput *m_video = nullptr;
