@@ -12,6 +12,7 @@ endif()
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Multimedia DBus Concurrent Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
+pkg_check_modules(TURBOJPEG REQUIRED IMPORTED_TARGET libturbojpeg)
 
 # Everything but main.cpp, shared by the app and the tests, so each source
 # compiles once and a new file in src/ needs no line here.
@@ -21,7 +22,7 @@ add_library(monologue_core STATIC ${monologue_sources})
 target_include_directories(monologue_core PUBLIC src)
 target_link_libraries(monologue_core PUBLIC
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Multimedia Qt6::DBus Qt6::Concurrent
-  PkgConfig::PULSE)
+  PkgConfig::PULSE PkgConfig::TURBOJPEG)
 target_compile_options(monologue_core PUBLIC -Wall -Wextra)
 
 add_executable(monologue src/main.cpp src/resources.qrc)

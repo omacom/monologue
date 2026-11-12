@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QAbstractVideoBuffer>
 #include <cmath>
 #include <sys/stat.h>
 #include "mediautils.h"
@@ -26,6 +27,22 @@ public:
     void saveVideo(const QUrl &url) override { suggestion=url; }
     void cancel() { emit closed(); }
     void choose(const QUrl &url) { emit closed(); emit selected(url); }
+};
+
+// A camera frame as Qt's V4L2 backend delivers MJPEG: one plane of JPEG bytes.
+class JpegBuffer : public QAbstractVideoBuffer {
+public:
+    JpegBuffer(QByteArray jpeg, QSize size) : m_jpeg(std::move(jpeg)), m_format(size, QVideoFrameFormat::Format_Jpeg) {}
+    QVideoFrameFormat format() const override { return m_format; }
+    MapData map(QVideoFrame::MapMode) override {
+        MapData result; result.planeCount=1;
+        result.data[0]=reinterpret_cast<uchar*>(m_jpeg.data());
+        result.bytesPerLine[0]=result.dataSize[0]=int(m_jpeg.size());
+        return result;
+    }
+private:
+    QByteArray m_jpeg;
+    QVideoFrameFormat m_format;
 };
 
 class Tests : public QObject {
@@ -382,13 +399,41 @@ private slots:
         QCOMPARE(backend.clips().size(),1);
         backend.closeTake();
     }
+    void jpegFramesRecordAs420() {
+        // Webcams send their largest modes as 4:2:2 MJPEG. Recording them as
+        // RGB made Qt pick a 12-bit 4:4:4 target that NVENC rejects, leaving
+        // software x264 at 4:4:4, too slow at 4K. They must arrive as 4:2:0.
+        QTemporaryDir directory;
+        const auto jpegPath=directory.filePath("frame.jpg"), path=directory.filePath("jpeg.mp4");
+        QProcess encode;
+        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240","-frames:v","1","-pix_fmt","yuvj422p",jpegPath});
+        QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
+        QFile file(jpegPath); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto jpeg=file.readAll();
+        const auto frame=[&] { return QVideoFrame(std::make_unique<JpegBuffer>(jpeg,QSize(320,240))); };
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,frame().surfaceFormat(),30,QAudioFormat(),0));
+        for(int i=0;i<15;++i) { writer.video(frame(),qRound64(i*1000000.0/30)); QTest::qWait(33); }
+        writer.pause(500000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess probe;
+        probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,width,height","-of","csv=p=0",path});
+        QVERIFY(probe.waitForFinished()); QCOMPARE(probe.exitCode(),0);
+        const auto stream=QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
+        QVERIFY2(stream.startsWith("320,240,yuv") && stream.endsWith("420p"),qPrintable(stream));
+        QProcess pixels;
+        pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
+        QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
+        const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
+        QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,qPrintable(rgb.toHex()));
+    }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;
         const auto path=directory.filePath("sync.mp4");
         QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(1); format.setSampleFormat(QAudioFormat::Int16);
         Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
-        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(64,64),QVideoFrameFormat::Format_BGRA8888),30,format,0));
-        QImage first(64,64,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,format,0));
+        QImage first(320,240,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
         int nextVideo=0, nextAudio=0;
         bool paused=false,resumed=false,finished=false;
         const QList<qint64> events{300000,966667,2300000,2966667};
@@ -400,7 +445,7 @@ private slots:
             // 80 ms plus the 20 ms buffer itself. Both describe the same events.
             while(qRound64(nextVideo*1000000.0/30)+33333<=delivered) {
                 const qint64 captured=qRound64(nextVideo*1000000.0/30);
-                QImage image(64,64,QImage::Format_RGB32);
+                QImage image(320,240,QImage::Format_RGB32);
                 image.fill(events.contains(captured)?Qt::white:Qt::black);
                 writer.video(QVideoFrame(image),captured); ++nextVideo;
             }

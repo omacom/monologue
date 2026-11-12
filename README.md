@@ -13,7 +13,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 
 ## Build and run
 
-Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer) with its FFmpeg backend `qt6-multimedia-ffmpeg`, `libpulse`, and `ffmpeg`; omarchy-pkgs' PKGBUILD is the full list. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
+Install a C++17 compiler, `cmake`, `make`, `qt6-base`, `qt6-declarative`, `qt6-multimedia` (Qt 6.8 or newer) with its FFmpeg backend `qt6-multimedia-ffmpeg`, `libpulse`, `libjpeg-turbo`, and `ffmpeg`; omarchy-pkgs' PKGBUILD is the full list. Microphone capture requires a PulseAudio-compatible server, such as PipeWire-Pulse on Omarchy. Then:
 
 ```sh
 ./bin/build
