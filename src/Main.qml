@@ -533,10 +533,16 @@ ApplicationWindow {
                 RoundButton {
                     id: mirrorButton; objectName: "mirrorButton"
                     visible: !win.finished
-                    width: 36; height: 36; padding: 0; flat: true
-                    focusPolicy: Qt.TabFocus
+                    // Implicit size, since the row layout ignores width and height.
+                    implicitWidth: 36; implicitHeight: 36; padding: 0; flat: true
+                    focusPolicy: Qt.TabFocus; hoverEnabled: true
                     Accessible.name: backend.mirror ? qsTr("Stop mirroring the preview") : qsTr("Mirror the preview")
-                    ToolTip.visible: hovered; ToolTip.text: (backend.mirror ? qsTr("Stop mirroring the preview") : qsTr("Mirror the preview")) + " (M)"
+                    // The glyph's right edge lines up with where the camera and microphone icons start on the left.
+                    Layout.rightMargin: -2
+                    ToolTip {
+                        objectName: "mirrorTip"; visible: mirrorButton.hovered
+                        text: (backend.mirror ? qsTr("Stop mirroring the preview") : qsTr("Mirror the preview")) + " (M)"
+                    }
                     background: Rectangle {
                         radius: width / 2; color: mirrorButton.hovered ? win.roundHoverColor : "transparent"
                         border.width: mirrorButton.activeFocus ? 2 : 0; border.color: win.accent

@@ -118,6 +118,11 @@ QtObject {
         auto *live=window->findChild<QQuickItem*>("liveVideo"); QVERIFY(live);
         auto *mirror=window->findChild<QQuickItem*>("mirrorButton"); QVERIFY(mirror);
         QVERIFY(live->property("mirrored").toBool()); QVERIFY(mirror->isVisible());
+        // Hovering explains it.
+        QTest::mouseMove(window,mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint());
+        auto *tip=window->findChild<QObject*>("mirrorTip"); QVERIFY(tip);
+        QTRY_VERIFY(tip->property("visible").toBool());
+        QCOMPARE(tip->property("text").toString(),QString("Stop mirroring the preview (M)"));
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint());
         QVERIFY(!backend->property("mirror").toBool()); QVERIFY(!live->property("mirrored").toBool());
         QTRY_VERIFY(live->hasActiveFocus());
