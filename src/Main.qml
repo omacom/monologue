@@ -24,7 +24,7 @@ ApplicationWindow {
     readonly property bool rightToLeft: Qt.application.layoutDirection === Qt.RightToLeft
     readonly property bool finished: backend.state === "finished" || backend.state === "saving"
     readonly property bool busy: backend.state === "finalizing" || backend.state === "saving"
-    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
+    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || overwriteDialog.visible || helpDialog.visible || backend.dialogOpen
     property bool quitting: false
     property var playbackOutput: null
     function time(seconds) {
@@ -156,8 +156,8 @@ ApplicationWindow {
     Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
     Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
-    Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
-    Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
+    Shortcut { sequences: ["Q", "Ctrl+Q", "Ctrl+W"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
+    Shortcut { sequences: ["?", "F1", "Ctrl+?"]; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
     readonly property color textColor: light ? "#18181b" : "#eeeef0"
     readonly property color strongColor: light ? "#000000" : "#ffffff"
@@ -206,6 +206,8 @@ ApplicationWindow {
         property bool iconFilled: false
         // 0–1 fills the button as a progress bar; -1 is an ordinary button.
         property real progress: -1
+        // Styled text shown in place of text, like a dialog choice's underlined letter.
+        property string markup: ""
         padding: 14; topPadding: 10; bottomPadding: 10
         font.pixelSize: 13; font.weight: Font.DemiBold
         focusPolicy: Qt.TabFocus
@@ -218,7 +220,7 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 spacing: 8; opacity: button.enabled ? 1 : .4
                 Icon { visible: button.iconPath !== ""; path: button.iconPath; filled: button.iconFilled; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
-                Text { visible: button.text !== ""; text: button.text; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+                Text { visible: button.text !== ""; text: button.markup || button.text; textFormat: button.markup ? Text.StyledText : Text.PlainText; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
             }
         }
         background: Rectangle {
@@ -255,7 +257,26 @@ ApplicationWindow {
             visible: count > 0
             delegate: ActionButton { }
         }
+        // The choice Enter takes when the dialog opens.
+        property Item defaultButton: null
+        onOpened: if (defaultButton) defaultButton.forceActiveFocus()
         onClosed: liveVideo.forceActiveFocus()
+    }
+    // A dialog choice, as in Plain and Omawrite: "<u>D</u>iscard" is pressed by D
+    // or Alt+D, and Tab or the arrow keys move along the row, wrapping around.
+    component ChoiceButton: ActionButton {
+        id: choice
+        text: markup.replace(/<\/?u>/g, "")
+        readonly property string key: (markup.match(/<u>(.)<\/u>/) || ["", ""])[1].toUpperCase()
+        Shortcut { sequences: choice.key ? [choice.key, "Alt+" + choice.key] : []; enabled: choice.visible && choice.enabled; onActivated: choice.clicked() }
+        function step(by) {
+            const row = Array.from(parent.children).filter(item => item.visible && item.markup !== undefined)
+            row[(row.indexOf(choice) + by + row.length) % row.length].forceActiveFocus()
+        }
+        Keys.onTabPressed: step(1)
+        Keys.onBacktabPressed: step(-1)
+        Keys.onLeftPressed: step(win.rightToLeft ? 1 : -1)
+        Keys.onRightPressed: step(win.rightToLeft ? -1 : 1)
     }
     // A source reads as quiet text with an icon; the dropdown appears on click.
     component SourceChoice: ComboBox {
@@ -548,14 +569,16 @@ ApplicationWindow {
     ThemedDialog {
         id: closeDialog; anchors.centerIn: parent; modal: true; title: qsTr("Quit and discard this take?")
         closePolicy: Popup.CloseOnEscape
+        defaultButton: stopAndEdit
         ColumnLayout {
             LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 16
             Label { text: qsTr("Quitting deletes the take you're recording. Stop to edit and save it first."); wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
             RowLayout {
-                ActionButton { text: qsTr("Keep recording"); onClicked: closeDialog.close() }
-                ActionButton { text: qsTr("Discard and quit"); onClicked: { closeDialog.close(); backend.discardAndClose() } }
-                ActionButton { text: qsTr("Stop and edit"); primary: true; onClicked: { closeDialog.close(); backend.finish() } }
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { markup: qsTr("<u>K</u>eep recording"); onClicked: closeDialog.close() }
+                ChoiceButton { markup: qsTr("<u>D</u>iscard and quit"); onClicked: { closeDialog.close(); backend.discardAndClose() } }
+                ChoiceButton { id: stopAndEdit; markup: qsTr("<u>S</u>top and edit"); primary: true; onClicked: { closeDialog.close(); backend.finish() } }
             }
         }
     }
@@ -564,6 +587,7 @@ ApplicationWindow {
         anchors.centerIn: parent; modal: true; title: qsTr("Discard this take?")
         width: Math.min(win.width-40,460)
         closePolicy: Popup.CloseOnEscape
+        defaultButton: unsavedSave
         property string action: "new"
         ColumnLayout {
             LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
@@ -575,9 +599,9 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                ActionButton { text: qsTr("Cancel"); onClicked: unsavedDialog.close() }
-                ActionButton { objectName: "unsavedDiscard"; text: unsavedDialog.action === "quit" ? qsTr("Discard and quit") : qsTr("Discard"); onClicked: { unsavedDialog.close(); win.leave(unsavedDialog.action) } }
-                ActionButton { text: qsTr("Save…"); primary: true; onClicked: { unsavedDialog.close(); backend.save() } }
+                ChoiceButton { markup: qsTr("<u>C</u>ancel"); onClicked: unsavedDialog.close() }
+                ChoiceButton { objectName: "unsavedDiscard"; markup: unsavedDialog.action === "quit" ? qsTr("<u>D</u>iscard and quit") : qsTr("<u>D</u>iscard"); onClicked: { unsavedDialog.close(); win.leave(unsavedDialog.action) } }
+                ChoiceButton { id: unsavedSave; objectName: "unsavedSave"; markup: qsTr("<u>S</u>ave…"); primary: true; onClicked: { unsavedDialog.close(); backend.save() } }
             }
         }
     }
@@ -588,33 +612,35 @@ ApplicationWindow {
         closePolicy: Popup.CloseOnEscape
         enter: Transition { }
         exit: Transition { }
-        onOpened: restartConfirm.forceActiveFocus()
-        footer: DialogButtonBox {
+        defaultButton: restartConfirm
+        ColumnLayout {
             LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
-            Material.roundedScale: win.cornerRadius
-            background: Item { }
-            ActionButton {
-                id: restartCancel; objectName: "restartCancel"; text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-                KeyNavigation.tab: restartConfirm; KeyNavigation.backtab: restartConfirm
-                KeyNavigation.left: restartConfirm; KeyNavigation.right: restartConfirm
-            }
-            ActionButton {
-                id: restartConfirm; objectName: "restartConfirm"; text: qsTr("Confirm"); primary: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-                KeyNavigation.tab: restartCancel; KeyNavigation.backtab: restartCancel
-                KeyNavigation.left: restartCancel; KeyNavigation.right: restartCancel
+            width: parent.width; spacing: 16
+            Label { Layout.fillWidth: true; text: qsTr("This deletes the current take. Anything you saved stays where you saved it."); wrapMode: Text.WordWrap }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { id: restartCancel; objectName: "restartCancel"; markup: qsTr("<u>C</u>ancel"); onClicked: restartDialog.reject() }
+                ChoiceButton { id: restartConfirm; objectName: "restartConfirm"; markup: qsTr("<u>D</u>iscard"); primary: true; onClicked: restartDialog.accept() }
             }
         }
-        Label { width: parent.width; text: qsTr("This deletes the current take. Anything you saved stays where you saved it."); wrapMode: Text.WordWrap }
         onAccepted: { player.stop(); backend.discardCurrent() }
     }
     ThemedDialog {
-        id: overwriteDialog; anchors.centerIn: parent; modal: true; title: qsTr("Replace the existing MP4?")
+        id: overwriteDialog; objectName: "overwriteDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Replace the existing MP4?")
         property string targetPath: ""
         width: Math.min(win.width-40,460)
-        standardButtons: Dialog.Yes | Dialog.No
-        Label { width: parent.width; text: qsTr("%1 already exists.").arg(overwriteDialog.targetPath); wrapMode: Text.WrapAnywhere }
+        closePolicy: Popup.CloseOnEscape
+        defaultButton: overwriteReplace
+        ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
+            width: parent.width; spacing: 16
+            Label { Layout.fillWidth: true; text: qsTr("%1 already exists.").arg(overwriteDialog.targetPath); wrapMode: Text.WrapAnywhere }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { markup: qsTr("<u>C</u>ancel"); onClicked: overwriteDialog.reject() }
+                ChoiceButton { id: overwriteReplace; objectName: "overwriteReplace"; markup: qsTr("<u>R</u>eplace"); primary: true; onClicked: overwriteDialog.accept() }
+            }
+        }
         onAccepted: backend.confirmOverwrite(true)
         onRejected: backend.confirmOverwrite(false)
     }
@@ -625,7 +651,7 @@ ApplicationWindow {
             spacing: 40
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Recording")
-                rows: [["Space", qsTr("Record / pause / resume")], ["Enter", qsTr("Stop and edit")], ["Esc", qsTr("Discard and start over")], ["Q", qsTr("Quit")], ["?", qsTr("Show shortcuts")]]
+                rows: [["Space", qsTr("Record / pause / resume")], ["Enter", qsTr("Stop and edit")], ["Esc", qsTr("Discard and start over")], ["Q", qsTr("Quit (Ctrl+Q, Ctrl+W)")], ["?", qsTr("Show shortcuts (F1)")]]
             }
             ShortcutList {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Editing")

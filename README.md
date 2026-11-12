@@ -31,8 +31,10 @@ Monologue is packaged in [omarchy-pkgs](https://github.com/omacom/omarchy-pkgs/t
 | Space | Record / pause / resume; play / pause while editing |
 | Enter or Ctrl+Enter | Stop the take and edit it |
 | Esc | Confirm discarding the clip and start over |
-| Q | Quit (asks first if the take is still recording or unsaved) |
-| ? | Keyboard help |
+| Q, Ctrl+Q, or Ctrl+W | Quit (asks first if the take is still recording or unsaved) |
+| ? or F1 | Keyboard help |
+
+Dialogs answer to their underlined letters, alone or with Alt. Tab and the arrow keys move between the choices, Enter picks one, and Esc cancels.
 
 The shutter button records and stops; the round button beside it pauses and resumes.
 

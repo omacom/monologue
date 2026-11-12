@@ -68,6 +68,8 @@ QtObject {
     function closeTake() {}
     function discardCurrent() { discards++; state = "ready"; changed() }
     function save() {}
+    property var overwriteAnswers: []
+    function confirmOverwrite(replace) { overwriteAnswers = overwriteAnswers.concat([replace]) }
     function split(t) {
         var next = []
         clips.forEach(c => { if (t > c.start && t < c.end) next.push({start: c.start, end: t}, {start: t, end: c.end}); else next.push(c) })
@@ -146,6 +148,13 @@ QtObject {
             QCOMPARE(backend->property("state").toString(),QString("ready"));
         }
         QCOMPARE(backend->property("discards").toInt(),3);
+        // A dialog's underlined letters pick its choices, alone or with Alt.
+        backend->setProperty("state","recording");
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(restart->property("opened").toBool());
+        QTest::keyClick(window,Qt::Key_C); QTRY_VERIFY(!restart->property("visible").toBool());
+        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(restart->property("opened").toBool());
+        QTest::keyClick(window,Qt::Key_D,Qt::AltModifier); QTRY_VERIFY(!restart->property("visible").toBool());
+        QCOMPARE(backend->property("discards").toInt(),4); QCOMPARE(backend->property("state").toString(),QString("ready"));
         QTest::keyClick(window,Qt::Key_Escape); QVERIFY(!restart->property("visible").toBool());
         QTest::keyClick(window,Qt::Key_Space);
         QCOMPARE(backend->property("state").toString(),QString("recording"));
@@ -226,10 +235,31 @@ QtObject {
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
         QTRY_VERIFY(unsaved->property("opened").toBool());
         QCOMPARE(backend->property("newRecordings").toInt(),0);
-        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
-        QTest::keyClick(window,Qt::Key_Q); QTRY_VERIFY(unsaved->property("opened").toBool());
-        QCOMPARE(unsaved->property("action").toString(),QString("quit"));
-        QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        // Save has focus, and Tab and the arrows wrap around the choices.
+        auto *unsavedSave=window->findChild<QQuickItem*>("unsavedSave"); QVERIFY(unsavedSave);
+        auto *unsavedDiscard=window->findChild<QQuickItem*>("unsavedDiscard"); QVERIFY(unsavedDiscard);
+        QTRY_VERIFY(unsavedSave->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Left); QVERIFY(unsavedDiscard->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Tab); QVERIFY(unsavedSave->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_Right); QVERIFY(!unsavedSave->hasActiveFocus() && !unsavedDiscard->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_C); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        QCOMPARE(backend->property("newRecordings").toInt(),0);
+        for(const auto &quit:{QKeySequence("Q"),QKeySequence("Ctrl+Q"),QKeySequence("Ctrl+W")}) {
+            QTest::keySequence(window,quit); QTRY_VERIFY(unsaved->property("opened").toBool());
+            QCOMPARE(unsaved->property("action").toString(),QString("quit"));
+            QTest::keyClick(window,Qt::Key_Escape); QTRY_VERIFY(!unsaved->property("visible").toBool());
+        }
+        // Replacing an existing MP4: Replace has focus, R or Enter replaces, C or Esc keeps it, and S doesn't split behind the dialog.
+        auto *overwrite=window->findChild<QObject*>("overwriteDialog"); QVERIFY(overwrite);
+        const auto clipCount=clips().size();
+        for(const int key:{int(Qt::Key_Return),int(Qt::Key_R),int(Qt::Key_C),int(Qt::Key_Escape)}) {
+            QMetaObject::invokeMethod(backend.data(),"overwriteRequested",Q_ARG(QString,"/tmp/take.mp4"));
+            QTRY_VERIFY(overwrite->property("opened").toBool());
+            QTRY_VERIFY(window->findChild<QQuickItem*>("overwriteReplace")->hasActiveFocus());
+            QTest::keyClick(window,Qt::Key_S); QCOMPARE(clips().size(),clipCount);
+            QTest::keyClick(window,Qt::Key(key)); QTRY_VERIFY(!overwrite->property("visible").toBool());
+        }
+        QCOMPARE(backend->property("overwriteAnswers").toList(),QVariantList({true,true,false,false}));
         QVERIFY(window->isVisible());
         backend->setProperty("unsaved",false);
         QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,newAt);
