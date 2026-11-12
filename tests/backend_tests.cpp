@@ -462,6 +462,45 @@ private slots:
         QCOMPARE(backend.clips().size(),1);
         backend.closeTake();
     }
+    void jitteryCameraKeepsEveryFrame() {
+        // A 30 fps camera whose frames fall midway between output slots, with
+        // the alternating 28/36 ms intervals real webcams show.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("jitter.mp4");
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0));
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::gray);
+        qint64 captured=15000;
+        for(int i=0;i<60;++i) {
+            writer.video(QVideoFrame(image),captured);
+            const qint64 step=(i%3==2)?28000:36000;
+            captured+=step;
+            QTest::qWait(int(step/1000));
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess streams; streams.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=nb_frames","-of","csv=p=0",path});
+        QVERIFY(streams.waitForFinished());
+        QCOMPARE(streams.readAllStandardOutput().trimmed().toInt(),60);
+    }
+    void stoppingAddsNoFrameAfterTheTake() {
+        // Finishing repeats the last camera frame to fill the take's final slot.
+        // That repeat must never move into a later slot, past where the take ends.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("tail.mp4");
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0));
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::gray);
+        // The first frame opens the encoder; give it that moment before the rest arrive.
+        writer.video(QVideoFrame(image),0); QTest::qWait(300);
+        for(int i=1;i<29;++i) { writer.video(QVideoFrame(image),qRound64(i*1000000.0/30)); QTest::qWait(33); }
+        writer.video(QVideoFrame(image),974000); QTest::qWait(33);
+        writer.pause(1009000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess streams; streams.start("ffprobe",{"-v","error","-select_streams","v:0","-count_frames","-show_entries","stream=nb_read_frames","-of","csv=p=0",path});
+        QVERIFY(streams.waitForFinished());
+        QCOMPARE(streams.readAllStandardOutput().trimmed().toInt(),30);
+    }
     void jpegFramesRecordAs420() {
         // Webcams send their largest modes as 4:2:2 MJPEG. Recording them as
         // RGB made Qt pick a 12-bit 4:4:4 target that NVENC rejects, leaving

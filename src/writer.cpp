@@ -290,14 +290,20 @@ void Writer::video(QVideoFrame frame, qint64 capturedAt) {
     if (m_stopping || m_failed || !frame.isValid()) return;
     const auto time = m_clock.position(capturedAt);
     if (!time) return;
-    videoAt(frame, *time);
+    videoAt(frame, *time, true);
 }
-void Writer::videoAt(QVideoFrame frame, qint64 position) {
+void Writer::videoAt(QVideoFrame frame, qint64 position, bool fromCamera) {
     // Quantize to the output rate instead of rejecting short callback intervals:
     // real webcams deliver jittery batches, which must not halve the frame rate.
-    const qint64 frameIndex = qRound64(position * m_fps / 1000000.0);
+    qint64 frameIndex = qRound64(position * m_fps / 1000000.0);
+    // When the camera's phase sits near the midpoint between output frames, its
+    // jitter rounds consecutive frames onto one slot. Take the next slot instead,
+    // provided that is at most three quarters of a frame early.
+    if (fromCamera && frameIndex <= m_lastIndex && (m_lastIndex + 1) * 1000000.0 / m_fps - position <= 0.75 * 1000000.0 / m_fps)
+        frameIndex = m_lastIndex + 1;
     const qint64 timestamp = qRound64(frameIndex * 1000000.0 / m_fps);
     if (timestamp <= m_lastVideo) return;
+    m_lastIndex = frameIndex;
     m_tailFrame = frame;
     if (Yuv420FrameBuffer::converts(frame.pixelFormat()))
         frame = QVideoFrame(std::make_unique<Yuv420FrameBuffer>(frame));
