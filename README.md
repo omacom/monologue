@@ -51,7 +51,7 @@ Handles catch on pause marks, neighbouring clips, and the playhead. Playback pla
 | [ / ] | Jump to the previous / next pause or clip edge |
 | S | Split the clip at the playhead |
 | X, Delete | Remove the clip under the playhead; in a gap, restore it |
-| Ctrl+Space / Alt+Space | Move the start / end of the clip under the playhead to the playhead |
+| Ctrl+Space / Ctrl+Shift+Space | Move the start / end of the clip under the playhead to the playhead |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
 | Z | Zoom to the clip under the playhead; again to zoom out |
 | Ctrl+S | Save |

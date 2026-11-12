@@ -149,7 +149,8 @@ ApplicationWindow {
     Shortcut { sequence: "S"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: backend.split(editBar.playheadSec) }
     Shortcut { sequences: ["X", "Delete", "Backspace"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing && !win.controlFocused; onActivated: win.removeOrRestore() }
     Shortcut { sequence: "Ctrl+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(true) }
-    Shortcut { sequence: "Alt+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(false) }
+    // Alt+Space is Omarchy's dictation key, so Hyprland takes it before the app sees it.
+    Shortcut { sequence: "Ctrl+Shift+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(false) }
     Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
     Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
@@ -618,7 +619,7 @@ ApplicationWindow {
                 Layout.alignment: Qt.AlignTop; heading: qsTr("Editing")
                 rows: [["Space", qsTr("Play / pause")], ["← →", qsTr("Move 1 s (Shift 5 s, Alt 0.2 s)")], ["[ ]", qsTr("Previous / next pause or clip edge")],
                        ["S", qsTr("Split the clip at the playhead")], ["X", qsTr("Remove the clip, or restore the gap")],
-                       ["Ctrl+Space", qsTr("Clip start to playhead")], ["Alt+Space", qsTr("Clip end to playhead")],
+                       ["Ctrl+Space", qsTr("Clip start to playhead")], ["Ctrl+Shift+Space", qsTr("Clip end to playhead")],
                        ["Ctrl+Z", qsTr("Undo (Ctrl+Shift+Z redo)")], ["Z", qsTr("Zoom to the clip")], ["Ctrl+S", qsTr("Save")], ["Esc", qsTr("Discard and start over")]]
             }
         }
