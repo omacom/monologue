@@ -12,6 +12,8 @@ struct Format { QSize size; double minFps; double maxFps; int pixelFormat; };
 int bestFormat(const QList<Format> &formats);
 QCameraFormat bestCameraFormat(const QCameraDevice &device);
 double targetFps(double minimum, double maximum);
+// The source to use: the remembered one while it's connected, else the default, else the first connected.
+QString chooseSource(const QStringList &connected, const QString &preferred, const QString &remembered);
 double peak(const QByteArray &data, const QAudioFormat &format);
 QString copyAtomically(const QString &source, const QString &destination);
 // Renames a finished partial file over destination, with the permissions a new file there would get.

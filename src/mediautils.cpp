@@ -13,6 +13,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+QString media::chooseSource(const QStringList &connected, const QString &preferred, const QString &remembered) {
+    if (connected.isEmpty() || connected.contains(remembered)) return remembered;
+    return connected.contains(preferred) ? preferred : connected.first();
+}
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
     int best = -1;
