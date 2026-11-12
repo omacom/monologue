@@ -39,7 +39,7 @@ QtObject {
     property real peakLevel: -6
     property bool clipping: false
     property string meterText: "−9 dBFS"
-    property bool mirror: false
+    property bool mirror: true
     property url clip: ""
     property string clipName: "Monologue-2026-09-17.mp4"
     property real saveProgress: 0
@@ -114,6 +114,14 @@ QtObject {
         const auto picture=window->grabWindow(); QVERIFY(picture.pixelColor(picture.width()/2,40).lightness()<20);
         QVERIFY(write(themeDir.filePath("theme/colors.toml"),"accent = \"#FFD60A\"\n"));
         QTRY_VERIFY(window->color().lightness()<40);
+        // The preview is mirrored by default; the button and M turn it off and on again.
+        auto *live=window->findChild<QQuickItem*>("liveVideo"); QVERIFY(live);
+        auto *mirror=window->findChild<QQuickItem*>("mirrorButton"); QVERIFY(mirror);
+        QVERIFY(live->property("mirrored").toBool()); QVERIFY(mirror->isVisible());
+        QTest::mouseClick(window,Qt::LeftButton,Qt::NoModifier,mirror->mapToScene(QPointF(mirror->width()/2,mirror->height()/2)).toPoint());
+        QVERIFY(!backend->property("mirror").toBool()); QVERIFY(!live->property("mirrored").toBool());
+        QTRY_VERIFY(live->hasActiveFocus());
+        QTest::keyClick(window,Qt::Key_M); QVERIFY(backend->property("mirror").toBool()); QVERIFY(live->property("mirrored").toBool());
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("paused"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));

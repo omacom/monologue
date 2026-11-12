@@ -399,6 +399,22 @@ private slots:
         backend.closeTake(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved));
         QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.unsaved());
     }
+    void mirrorIsOnUntilTurnedOff() {
+        {
+            Backend backend(new FakePicker,false);
+            QVERIFY(backend.mirror());
+            QSignalSpy changed(&backend,&Backend::mirrorChanged);
+            backend.setMirror(false); backend.setMirror(false);
+            QVERIFY(!backend.mirror()); QCOMPARE(changed.count(),1);
+        }
+        {
+            Backend backend(new FakePicker,false);
+            QVERIFY(!backend.mirror());
+            backend.setMirror(true);
+        }
+        Backend backend(new FakePicker,false);
+        QVERIFY(backend.mirror());
+    }
     void leavingDeletesTake() {
         auto directory=leaveTake("00000000-0000-0000-0000-000000000003",fixture.filePath("fixture.mp4"));
         {

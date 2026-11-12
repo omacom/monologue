@@ -32,6 +32,7 @@ Monologue is packaged in [omarchy-pkgs](https://github.com/omacom/omarchy-pkgs/t
 | Space | Record / pause / resume; play / pause while editing |
 | Enter or Ctrl+Enter | Stop the take and edit it |
 | Esc | Confirm discarding the clip and start over |
+| M | Mirror the preview, or stop (the recording is never mirrored) |
 | Q, Ctrl+Q, or Ctrl+W | Quit (asks first if the take is still recording or unsaved) |
 | ? or F1 | Keyboard help |
 
