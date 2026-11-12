@@ -348,21 +348,21 @@ private slots:
         QTemporaryDir directory;
         const auto jpegPath=directory.filePath("frame.jpg"), path=directory.filePath("jpeg.mp4");
         QProcess encode;
-        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=64x48","-frames:v","1","-pix_fmt","yuvj422p",jpegPath});
+        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240","-frames:v","1","-pix_fmt","yuvj422p",jpegPath});
         QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
         QFile file(jpegPath); QVERIFY(file.open(QIODevice::ReadOnly));
         const auto jpeg=file.readAll();
-        const auto frame=[&] { return QVideoFrame(std::make_unique<JpegBuffer>(jpeg,QSize(64,48))); };
+        const auto frame=[&] { return QVideoFrame(std::make_unique<JpegBuffer>(jpeg,QSize(320,240))); };
         Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
         QVERIFY(writer.start(path,frame().surfaceFormat(),30,QAudioFormat(),0));
-        for(int i=0;i<15;++i) { writer.video(frame(),qRound64(i*1000000.0/30)); QTest::qWait(5); }
+        for(int i=0;i<15;++i) { writer.video(frame(),qRound64(i*1000000.0/30)); QTest::qWait(33); }
         writer.pause(500000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
         QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
         QProcess probe;
         probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,width,height","-of","csv=p=0",path});
         QVERIFY(probe.waitForFinished()); QCOMPARE(probe.exitCode(),0);
         const auto stream=QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
-        QVERIFY2(stream.startsWith("64,48,yuv") && stream.endsWith("420p"),qPrintable(stream));
+        QVERIFY2(stream.startsWith("320,240,yuv") && stream.endsWith("420p"),qPrintable(stream));
         QProcess pixels;
         pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
         QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);

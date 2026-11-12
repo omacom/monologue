@@ -62,10 +62,20 @@ public:
     explicit Yuv420FrameBuffer(const QVideoFrame &source)
         : m_source(source),
           m_format(source.size(), QVideoFrameFormat::Format_YUV420P) {
-        const bool jpeg = source.pixelFormat() == QVideoFrameFormat::Format_Jpeg;
-        m_format.setColorSpace(QVideoFrameFormat::ColorSpace_BT601);
-        m_format.setColorRange(jpeg ? QVideoFrameFormat::ColorRange_Full : QVideoFrameFormat::ColorRange_Video);
-        m_format.setStreamFrameRate(source.surfaceFormat().streamFrameRate());
+        const auto &surface = source.surfaceFormat();
+        const auto pixelFormat = source.pixelFormat();
+        if (pixelFormat == QVideoFrameFormat::Format_YUYV || pixelFormat == QVideoFrameFormat::Format_UYVY) {
+            // Packed 4:2:2 keeps its sample values, so it keeps its colour labels too.
+            m_format.setColorSpace(surface.colorSpace());
+            m_format.setColorRange(surface.colorRange());
+            m_format.setColorTransfer(surface.colorTransfer());
+        } else {
+            // JPEG decodes to full-range BT.601; RGB is converted to limited-range BT.601.
+            m_format.setColorSpace(QVideoFrameFormat::ColorSpace_BT601);
+            m_format.setColorRange(pixelFormat == QVideoFrameFormat::Format_Jpeg
+                                   ? QVideoFrameFormat::ColorRange_Full : QVideoFrameFormat::ColorRange_Video);
+        }
+        m_format.setStreamFrameRate(surface.streamFrameRate());
     }
     QVideoFrameFormat format() const override { return m_format; }
     MapData map(QVideoFrame::MapMode mode) override {
