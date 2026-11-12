@@ -18,6 +18,10 @@ QVideoFrameFormat::ColorSpace colorSpace(int v4l2Colorspace, int v4l2Encoding);
 QVideoFrameFormat::ColorSpace cameraColorSpace(const QByteArray &device);
 // Shares the source's image planes and capture times under a new format; later metadata changes stay independent.
 QVideoFrame withFormat(const QVideoFrame &source, const QVideoFrameFormat &format);
+// A whole JPEG: starts with SOI and ends with EOI, allowing a little padding after it.
+bool completeJpeg(const uchar *data, qsizetype size);
+// False for an MJPEG frame the camera cut short; other frames always pass.
+bool completeFrame(const QVideoFrame &frame);
 // Chooses Qt's FFmpeg backend, which takes custom timestamped frames, before anything loads it.
 void useFfmpeg();
 double targetFps(double minimum, double maximum);

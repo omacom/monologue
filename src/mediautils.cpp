@@ -72,6 +72,21 @@ QString media::chooseSource(const QStringList &connected, const QString &preferr
     if (connected.isEmpty() || connected.contains(remembered)) return remembered;
     return connected.contains(preferred) ? preferred : connected.first();
 }
+bool media::completeJpeg(const uchar *data, qsizetype size) {
+    if (size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
+    // Some cameras pad the buffer past EOI, so look for it near the end rather than at it.
+    for (qsizetype i = size - 2; i >= std::max<qsizetype>(2, size - 64); --i)
+        if (data[i] == 0xFF && data[i + 1] == 0xD9) return true;
+    return false;
+}
+bool media::completeFrame(const QVideoFrame &frame) {
+    if (frame.pixelFormat() != QVideoFrameFormat::Format_Jpeg) return true;
+    QVideoFrame mapped(frame);
+    if (!mapped.map(QVideoFrame::ReadOnly)) return false;
+    const bool complete = completeJpeg(mapped.bits(0), mapped.mappedBytes(0));
+    mapped.unmap();
+    return complete;
+}
 void media::useFfmpeg() {
     qputenv("QT_MEDIA_BACKEND", "ffmpeg");
     // Loading the backend tries every hardware API before returning, about two

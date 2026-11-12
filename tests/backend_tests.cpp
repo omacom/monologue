@@ -68,6 +68,24 @@ private slots:
         // A camera whose every mode is slower than 15 fps still records at its largest size.
         QCOMPARE(media::bestFormat({{{1280,720},10,10,0}, {{640,480},10,12,0}}), 0);
     }
+    void truncatedJpegIsSkipped() {
+        // An MJPEG frame the camera cut short has no end-of-image marker.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("frame.jpg");
+        QProcess encode; encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240","-frames:v","1",path});
+        QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
+        QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto jpeg=file.readAll();
+        auto complete=[](const QByteArray &bytes) { return media::completeJpeg(reinterpret_cast<const uchar*>(bytes.constData()),bytes.size()); };
+        QVERIFY(complete(jpeg));
+        QVERIFY(complete(jpeg+QByteArray(32,'\0')));
+        QVERIFY(!complete(jpeg.left(jpeg.size()*2/3)));
+        QVERIFY(!complete(QByteArray("\xFF\xD9",2)));
+        const auto frame=[](const QByteArray &bytes) { return QVideoFrame(std::make_unique<JpegBuffer>(bytes,QSize(320,240))); };
+        QVERIFY(media::completeFrame(frame(jpeg)));
+        QVERIFY(!media::completeFrame(frame(jpeg.left(jpeg.size()/2))));
+        QImage image(4,4,QImage::Format_RGB32); QVERIFY(media::completeFrame(QVideoFrame(image)));
+    }
     void cameraColorSpace() {
         // Cam Link 4K: sRGB colorspace, explicit BT.709 encoding.
         QCOMPARE(media::colorSpace(V4L2_COLORSPACE_SRGB,V4L2_YCBCR_ENC_709),QVideoFrameFormat::ColorSpace_BT709);

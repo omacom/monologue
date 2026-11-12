@@ -186,6 +186,9 @@ void Backend::receiveVideo(QVideoFrame frame) {
     if(frame.size()!=m_cameraFormat.resolution()) {
         sourceFailed(tr("The camera did not provide its maximum resolution. Choose another source or Retry.")); return;
     }
+    // uvcvideo flags a frame the camera cut short, but Qt passes it on regardless,
+    // and it decodes as a coloured grid. Skip it; the recording holds the frame before.
+    if(!media::completeFrame(frame)) return;
     m_lastFrame=frame;
     // Once stopped, the preview holds the take's final frame while it finalizes.
     if(m_preview && m_state!="finalizing") m_preview->setVideoFrame(frame);
