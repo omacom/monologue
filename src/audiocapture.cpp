@@ -15,20 +15,20 @@ void AudioCapture::start(const QByteArray &device, const QAudioFormat &format) {
     m_device = device;
     m_format = format;
     m_loop = pa_mainloop_new();
-    if (!m_loop) { fail("Could not create the audio capture loop."); return; }
+    if (!m_loop) { fail(tr("Could not create the audio capture loop.")); return; }
     m_context = pa_context_new(pa_mainloop_get_api(m_loop), "Monologue");
-    if (!m_context) { fail("Could not connect to the desktop audio server."); return; }
+    if (!m_context) { fail(tr("Could not connect to the desktop audio server.")); return; }
     pa_context_set_state_callback(m_context, [](pa_context *context, void *opaque) {
         auto *self = static_cast<AudioCapture*>(opaque);
         switch (pa_context_get_state(context)) {
         case PA_CONTEXT_READY: self->contextReady(); break;
         case PA_CONTEXT_FAILED:
-        case PA_CONTEXT_TERMINATED: self->fail("The desktop audio server disconnected."); break;
+        case PA_CONTEXT_TERMINATED: self->fail(tr("The desktop audio server disconnected.")); break;
         default: break;
         }
     }, this);
     if (pa_context_connect(m_context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) {
-        fail("Could not connect to the PulseAudio-compatible desktop audio server."); return;
+        fail(tr("Could not connect to the PulseAudio-compatible desktop audio server.")); return;
     }
     m_pump.start();
 }
@@ -43,15 +43,15 @@ void AudioCapture::contextReady() {
     case QAudioFormat::Float: spec.format = PA_SAMPLE_FLOAT32NE; break;
     default: spec.format = PA_SAMPLE_INVALID; break;
     }
-    if (!pa_sample_spec_valid(&spec)) { fail("The microphone's sample format is not supported."); return; }
+    if (!pa_sample_spec_valid(&spec)) { fail(tr("The microphone's sample format is not supported.")); return; }
     m_stream = pa_stream_new(m_context, "Microphone capture", &spec, nullptr);
-    if (!m_stream) { fail("Could not create the microphone stream."); return; }
+    if (!m_stream) { fail(tr("Could not create the microphone stream.")); return; }
     pa_stream_set_state_callback(m_stream, [](pa_stream *stream, void *opaque) {
         auto *self = static_cast<AudioCapture*>(opaque);
         switch (pa_stream_get_state(stream)) {
         case PA_STREAM_READY: self->requestTiming(); break;
         case PA_STREAM_FAILED:
-        case PA_STREAM_TERMINATED: self->fail("The selected microphone disconnected or could not be opened."); break;
+        case PA_STREAM_TERMINATED: self->fail(tr("The selected microphone disconnected or could not be opened.")); break;
         default: break;
         }
     }, this);
@@ -65,7 +65,7 @@ void AudioCapture::contextReady() {
     const auto flags = pa_stream_flags_t(PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_INTERPOLATE_TIMING |
                                         PA_STREAM_ADJUST_LATENCY | PA_STREAM_DONT_MOVE);
     if (pa_stream_connect_record(m_stream, m_device.constData(), &buffers, flags) < 0)
-        fail("Could not open the selected microphone.");
+        fail(tr("Could not open the selected microphone."));
 }
 void AudioCapture::requestTiming() {
     if (m_timingRequested || m_failed || !m_stream || pa_stream_get_state(m_stream) != PA_STREAM_READY) return;
@@ -81,7 +81,7 @@ void AudioCapture::requestTiming() {
 void AudioCapture::pump() {
     if (m_failed || !m_loop) return;
     int result = 0;
-    if (pa_mainloop_iterate(m_loop, 0, &result) < 0) { fail("The audio capture loop stopped."); return; }
+    if (pa_mainloop_iterate(m_loop, 0, &result) < 0) { fail(tr("The audio capture loop stopped.")); return; }
     readAvailable();
 }
 void AudioCapture::readAvailable() {
@@ -89,7 +89,7 @@ void AudioCapture::readAvailable() {
     m_reading = true;
     while (!m_failed) {
         const auto available = pa_stream_readable_size(m_stream);
-        if (available == size_t(-1)) { fail("Could not read the microphone."); break; }
+        if (available == size_t(-1)) { fail(tr("Could not read the microphone.")); break; }
         if (!available) break;
         pa_usec_t latency = 0;
         int negative = 0;
@@ -106,15 +106,15 @@ void AudioCapture::readAvailable() {
         }
         const void *data = nullptr;
         size_t bytes = 0;
-        if (pa_stream_peek(m_stream, &data, &bytes) < 0) { fail("Could not read microphone samples."); break; }
+        if (pa_stream_peek(m_stream, &data, &bytes) < 0) { fail(tr("Could not read microphone samples.")); break; }
         if (!bytes) break;
         if (bytes > size_t(m_format.bytesForDuration(2000000)) || bytes % m_format.bytesPerFrame()) {
-            fail("The microphone supplied an invalid audio buffer."); break;
+            fail(tr("The microphone supplied an invalid audio buffer.")); break;
         }
         // PulseAudio holes are silence with a duration, not a clock reset.
         QByteArray pcm = data ? QByteArray(static_cast<const char*>(data), qsizetype(bytes))
                               : QByteArray(qsizetype(bytes), m_format.sampleFormat() == QAudioFormat::UInt8 ? char(128) : char(0));
-        if (pa_stream_drop(m_stream) < 0) { fail("Could not advance microphone capture."); break; }
+        if (pa_stream_drop(m_stream) < 0) { fail(tr("Could not advance microphone capture.")); break; }
         emit samples(pcm, capturedAt);
     }
     m_reading = false;

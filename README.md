@@ -7,6 +7,7 @@ A simple webcam recorder for Omarchy. Choose your camera and microphone once, th
 - Live microphone meter with peak hold and clipping indication, including while paused. No microphone playback through your speakers.
 - Explicit No audio option for silent recordings.
 - Live Omarchy accent syncing, including theme symlink switches. Controls and dialogs follow Hyprland's active corner rounding, including personal overrides. Dark chrome and a yellow fallback follow Omacut; button foregrounds adapt for contrast.
+- Follows the language picked under Omarchy's Setup > Language, live, including right-to-left layout. Every visible string goes through `qsTr()` or `tr()`; a translation is a flat JSON catalog from English text to the translation, `src/i18n/<code>.json`, listed in `src/resources.qrc`.
 - Built-in editing: split the take into clips on an Omacut-style filmstrip, trim each clip with its handles, see where you paused, and undo. Edits never touch the original.
 - H.264 MP4 with AAC audio, retained originals, and atomic Save.
 
