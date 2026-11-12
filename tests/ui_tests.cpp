@@ -10,6 +10,7 @@
 #include <QVideoSink>
 #include <QVideoFrame>
 #include "theme.h"
+#include "mediautils.h"
 
 class UiTests : public QObject {
     Q_OBJECT
@@ -302,7 +303,7 @@ QtObject {
     }
 };
 int main(int argc,char**argv) {
-    qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    media::useFfmpeg();
     // Offscreen however it's started, so a test never opens a window on the desktop.
     qputenv("QT_QPA_PLATFORM","offscreen");
     // Rendered the same with or without a GPU, and without the desktop's platform theme plugin.

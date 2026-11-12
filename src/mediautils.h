@@ -18,6 +18,8 @@ QVideoFrameFormat::ColorSpace colorSpace(int v4l2Colorspace, int v4l2Encoding);
 QVideoFrameFormat::ColorSpace cameraColorSpace(const QByteArray &device);
 // Shares the source's image planes and capture times under a new format; later metadata changes stay independent.
 QVideoFrame withFormat(const QVideoFrame &source, const QVideoFrameFormat &format);
+// Chooses Qt's FFmpeg backend, which takes custom timestamped frames, before anything loads it.
+void useFfmpeg();
 double targetFps(double minimum, double maximum);
 // The source to use: the remembered one while it's connected, else the default, else the first connected.
 QString chooseSource(const QStringList &connected, const QString &preferred, const QString &remembered);

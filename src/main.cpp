@@ -5,13 +5,13 @@
 #include <QIcon>
 #include <QTimer>
 #include "backend.h"
+#include "mediautils.h"
 #include "theme.h"
 #include "translator.h"
 #include "thumbprovider.h"
 
 int main(int argc,char *argv[]) {
-    // Custom timestamped frame/buffer inputs require Qt's FFmpeg backend.
-    qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    media::useFfmpeg();
     QGuiApplication app(argc,argv);
     app.setApplicationName("monologue");
     app.setApplicationVersion("0.3.1");
