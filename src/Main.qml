@@ -618,7 +618,7 @@ ApplicationWindow {
         onRejected: backend.confirmOverwrite(false)
     }
     ThemedDialog {
-        id: helpDialog; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
+        id: helpDialog; objectName: "helpDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
         RowLayout {
             LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 40
