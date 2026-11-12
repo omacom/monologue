@@ -72,6 +72,14 @@ QString media::chooseSource(const QStringList &connected, const QString &preferr
     if (connected.isEmpty() || connected.contains(remembered)) return remembered;
     return connected.contains(preferred) ? preferred : connected.first();
 }
+void media::useFfmpeg() {
+    qputenv("QT_MEDIA_BACKEND", "ffmpeg");
+    // Loading the backend tries every hardware API before returning, about two
+    // seconds before the window can show, Vulkan alone most of one. Recording
+    // only needs the APIs behind NVENC (CUDA) and Intel and AMD's encoders (VA-API).
+    for (const char *variable : {"QT_FFMPEG_ENCODING_HW_DEVICE_TYPES", "QT_FFMPEG_DECODING_HW_DEVICE_TYPES"})
+        if (!qEnvironmentVariableIsSet(variable)) qputenv(variable, "cuda,vaapi");
+}
 double media::targetFps(double minimum, double maximum) { return std::clamp(30.0, minimum, maximum); }
 int media::bestFormat(const QList<Format> &formats) {
     int best = -1;
