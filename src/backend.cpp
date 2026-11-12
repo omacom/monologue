@@ -68,12 +68,14 @@ void Backend::setPreview(QObject *sink) {
     if (m_preview && m_lastFrame.isValid()) m_preview->setVideoFrame(m_lastFrame);
 }
 void Backend::refreshDevices() {
+    const auto camera=m_cameraId, audio=m_audioId;
     const auto [cameraMissing,audioMissing]=listDevices();
+    const bool switched=camera!=m_cameraId || audio!=m_audioId;
     if(m_writer) {
         if(cameraMissing || audioMissing) sourceFailed(tr("A selected source was disconnected, so the take was stopped."));
     } else if(m_state!="finished" && m_state!="saving" && m_state!="finalizing") {
         // Do not reopen healthy devices when an unrelated input is plugged in.
-        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing) activateSources();
+        if(!m_cameraHealthy || (audioEnabled() && !m_audioHealthy) || cameraMissing || audioMissing || switched) activateSources();
     }
 }
 void Backend::retranslate() {
@@ -94,11 +96,12 @@ std::pair<bool,bool> Backend::listDevices() {
         cameras.append(d);
     }
     const auto microphones=QMediaDevices::audioInputs();
-    if (m_cameraId.isEmpty() && !cameras.isEmpty()) {
-        const auto preferred=QMediaDevices::defaultVideoInput();
-        m_cameraId=deviceId((cameras.contains(preferred) ? preferred : cameras.first()).id());
+    // Mid-take, a missing source has to stop the recording rather than be replaced.
+    if (!m_writer) {
+        auto ids=[](const auto &devices) { QStringList result; for(const auto &d:devices) result<<deviceId(d.id()); return result; };
+        m_cameraId=media::chooseSource(ids(cameras),deviceId(QMediaDevices::defaultVideoInput().id()),m_cameraId);
+        if (m_audioId!="none") m_audioId=media::chooseSource(ids(microphones),deviceId(QMediaDevices::defaultAudioInput().id()),m_audioId);
     }
-    if (m_audioId.isEmpty() && !microphones.isEmpty()) m_audioId=deviceId(QMediaDevices::defaultAudioInput().id());
     auto label=[](const auto &device,const auto &all) {
         int count=0;
         for(const auto &other:all) if(other.description()==device.description()) ++count;

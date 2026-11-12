@@ -97,6 +97,18 @@ QtObject {
         engine.load(QUrl("qrc:/Main.qml")); QVERIFY(!engine.rootObjects().isEmpty());
         auto *window=qobject_cast<QQuickWindow*>(engine.rootObjects().first()); QVERIFY(window);
         QVERIFY(QTest::qWaitForWindowExposed(window)); window->requestActivate(); QTest::qWait(100);
+        // The chrome follows a light Omarchy theme live, dialogs included, and goes back to dark; the camera area stays black.
+        auto *help=window->findChild<QObject*>("helpDialog"); QVERIFY(help);
+        auto helpBackground=[&] { return help->property("background").value<QQuickItem*>()->property("color").value<QColor>(); };
+        auto bottomBar=[&] { const auto image=window->grabWindow(); return image.pixelColor(4,image.height()-4); };
+        QVERIFY(window->color().lightness()<40 && bottomBar().lightness()<40 && helpBackground().lightness()<60);
+        QVERIFY(QDir().mkpath(themeDir.filePath("theme")));
+        QVERIFY(write(themeDir.filePath("theme/colors.toml"),"mode = \"light\"\naccent = \"#FFD60A\"\n"));
+        QTRY_VERIFY(window->color().lightness()>220);
+        QVERIFY(bottomBar().lightness()>220); QVERIFY(helpBackground().lightness()>220);
+        const auto picture=window->grabWindow(); QVERIFY(picture.pixelColor(picture.width()/2,40).lightness()<20);
+        QVERIFY(write(themeDir.filePath("theme/colors.toml"),"accent = \"#FFD60A\"\n"));
+        QTRY_VERIFY(window->color().lightness()<40);
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("paused"));
         QTest::keyClick(window,Qt::Key_Space); QCOMPARE(backend->property("state").toString(),QString("recording"));
