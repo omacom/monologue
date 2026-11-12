@@ -54,7 +54,7 @@ const QDBusArgument &operator>>(const QDBusArgument &argument, PortalFileFilter 
 }
 
 PortalFileFilter mp4Filter() {
-    return {QStringLiteral("MP4 video"), {{0, QStringLiteral("*.mp4")}}};
+    return {PortalFilePicker::tr("MP4 video"), {{0, QStringLiteral("*.mp4")}}};
 }
 
 QString portalToken() {
@@ -92,7 +92,7 @@ void PortalFilePicker::saveVideo(const QUrl &suggestedUrl) {
         return;
     const QFileInfo target(suggestedUrl.toLocalFile());
     QVariantMap options;
-    options.insert(QStringLiteral("accept_label"), QStringLiteral("Save"));
+    options.insert(QStringLiteral("accept_label"), tr("Save"));
     options.insert(QStringLiteral("modal"), true);
     options.insert(QStringLiteral("current_folder"), portalPathBytes(target.absolutePath()));
     options.insert(QStringLiteral("current_name"), target.fileName());
@@ -105,7 +105,7 @@ void PortalFilePicker::saveVideo(const QUrl &suggestedUrl) {
                           QStringLiteral("org.freedesktop.portal.FileChooser"),
                           bus);
     if (!portal.isValid()) {
-        emit failed(QStringLiteral("The XDG desktop portal file chooser is not available."));
+        emit failed(tr("The XDG desktop portal file chooser is not available."));
         return;
     }
 
@@ -122,12 +122,12 @@ void PortalFilePicker::saveVideo(const QUrl &suggestedUrl) {
     m_pending = true;
     if (!connectToRequestPath(predictedPath)) {
         clearPending();
-        emit failed(QStringLiteral("Could not listen for the portal file picker response."));
+        emit failed(tr("Could not listen for the portal file picker response."));
         return;
     }
 
     auto *watcher = new QDBusPendingCallWatcher(
-        portal.asyncCall(QStringLiteral("SaveFile"), QString(), QStringLiteral("Save Video File"), options), this);
+        portal.asyncCall(QStringLiteral("SaveFile"), QString(), tr("Save Video File"), options), this);
 
     connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, watcher]() {
         QDBusPendingReply<QDBusObjectPath> reply = *watcher;
@@ -139,7 +139,7 @@ void PortalFilePicker::saveVideo(const QUrl &suggestedUrl) {
 
         if (reply.isError()) {
             clearPending();
-            emit failed(QStringLiteral("The portal file picker failed: %1")
+            emit failed(tr("The portal file picker failed: %1")
                             .arg(reply.error().message()));
             return;
         }
@@ -154,7 +154,7 @@ void PortalFilePicker::saveVideo(const QUrl &suggestedUrl) {
                 this, SLOT(handleResponse(uint,QVariantMap)));
             if (!connectToRequestPath(actualPath)) {
                 clearPending();
-                emit failed(QStringLiteral("Could not listen for the portal file picker response."));
+                emit failed(tr("Could not listen for the portal file picker response."));
             }
         }
     });

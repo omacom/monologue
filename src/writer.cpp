@@ -2,7 +2,196 @@
 #include <QMediaFormat>
 #include <QUrl>
 #include "mediautils.h"
+#include <QAbstractVideoBuffer>
+#include <QImage>
 #include <limits>
+#include <memory>
+#include <cstring>
+#include <turbojpeg.h>
+
+namespace {
+// Qt chooses the encoder's input format from the source frame's. For RGB it
+// asks for 12-bit 4:4:4 and for packed 4:2:2 for 10-bit 4:2:2, both of which
+// H.264 NVENC rejects; Qt then falls back to software x264 at 4:4:4 or 4:2:2,
+// which cannot keep up at 4K and starves the audio queue. Hand the encoder
+// 8-bit 4:2:0 instead, so hardware encoders apply and software encoding stays
+// cheap. Webcams send their largest modes as MJPEG, which is decoded straight
+// to YUV. map() runs on Qt's encoder thread, keeping the work off the UI thread.
+class Yuv420FrameBuffer : public QAbstractVideoBuffer {
+public:
+    static bool converts(QVideoFrameFormat::PixelFormat format) {
+        switch (format) {
+        case QVideoFrameFormat::Format_Jpeg:
+        case QVideoFrameFormat::Format_YUYV:
+        case QVideoFrameFormat::Format_UYVY:
+        case QVideoFrameFormat::Format_ARGB8888: case QVideoFrameFormat::Format_ARGB8888_Premultiplied:
+        case QVideoFrameFormat::Format_XRGB8888: case QVideoFrameFormat::Format_BGRA8888:
+        case QVideoFrameFormat::Format_BGRA8888_Premultiplied: case QVideoFrameFormat::Format_BGRX8888:
+        case QVideoFrameFormat::Format_ABGR8888: case QVideoFrameFormat::Format_XBGR8888:
+        case QVideoFrameFormat::Format_RGBA8888: case QVideoFrameFormat::Format_RGBX8888:
+            return true;
+        default:
+            return false;
+        }
+    }
+    explicit Yuv420FrameBuffer(const QVideoFrame &source)
+        : m_source(source),
+          m_format(source.size(), QVideoFrameFormat::Format_YUV420P) {
+        const auto &surface = source.surfaceFormat();
+        const auto pixelFormat = source.pixelFormat();
+        if (pixelFormat == QVideoFrameFormat::Format_YUYV || pixelFormat == QVideoFrameFormat::Format_UYVY) {
+            // Packed 4:2:2 keeps its sample values, so it keeps its colour labels too.
+            m_format.setColorSpace(surface.colorSpace());
+            m_format.setColorRange(surface.colorRange());
+            m_format.setColorTransfer(surface.colorTransfer());
+        } else {
+            // JPEG decodes to full-range BT.601; RGB is converted to limited-range BT.601.
+            m_format.setColorSpace(QVideoFrameFormat::ColorSpace_BT601);
+            m_format.setColorRange(pixelFormat == QVideoFrameFormat::Format_Jpeg
+                                   ? QVideoFrameFormat::ColorRange_Full : QVideoFrameFormat::ColorRange_Video);
+        }
+        m_format.setStreamFrameRate(surface.streamFrameRate());
+    }
+    QVideoFrameFormat format() const override { return m_format; }
+    MapData map(QVideoFrame::MapMode mode) override {
+        MapData result;
+        if(mode != QVideoFrame::ReadOnly) return result;
+        if(m_planes.isEmpty()) convert();
+        const int w=m_format.frameWidth(), h=m_format.frameHeight();
+        const int cw=(w+1)/2, ch=(h+1)/2;
+        uchar *base=reinterpret_cast<uchar*>(m_planes.data());
+        result.planeCount=3;
+        result.data[0]=base;                 result.bytesPerLine[0]=w;  result.dataSize[0]=w*h;
+        result.data[1]=base+w*h;             result.bytesPerLine[1]=cw; result.dataSize[1]=cw*ch;
+        result.data[2]=base+w*h+cw*ch;       result.bytesPerLine[2]=cw; result.dataSize[2]=cw*ch;
+        return result;
+    }
+    void unmap() override {}
+private:
+    void convert() {
+        const int w=m_format.frameWidth(), h=m_format.frameHeight();
+        const int cw=(w+1)/2, ch=(h+1)/2;
+        m_planes=QByteArray(qsizetype(w)*h+2*qsizetype(cw)*ch, Qt::Uninitialized);
+        uchar *y=reinterpret_cast<uchar*>(m_planes.data()), *u=y+w*h, *v=u+cw*ch;
+        bool converted=false;
+        switch (m_source.pixelFormat()) {
+        case QVideoFrameFormat::Format_Jpeg: converted=fromJpeg(y,u,v); break;
+        case QVideoFrameFormat::Format_YUYV: converted=fromPacked(y,u,v,0,1,3); break;
+        case QVideoFrameFormat::Format_UYVY: converted=fromPacked(y,u,v,1,0,2); break;
+        default: converted=fromRgb(y,u,v); break;
+        }
+        // A corrupt webcam frame becomes neutral grey rather than failing the take.
+        if(!converted) { std::memset(y, 128, size_t(w)*h); std::memset(u, 128, size_t(cw)*ch*2); }
+        m_source=QVideoFrame();
+    }
+    static tjhandle decoder() {
+        thread_local std::unique_ptr<void, int(*)(tjhandle)> handle(tj3Init(TJINIT_DECOMPRESS),
+            [](tjhandle h) { tj3Destroy(h); return 0; });
+        return handle.get();
+    }
+    bool fromJpeg(uchar *y, uchar *u, uchar *v) {
+        const int w=m_format.frameWidth(), h=m_format.frameHeight();
+        const int cw=(w+1)/2, ch=(h+1)/2;
+        tjhandle tj=decoder();
+        if(!tj || !m_source.map(QVideoFrame::ReadOnly)) return false;
+        bool decoded=false;
+        const auto *jpeg=m_source.bits(0);
+        const size_t size=size_t(m_source.mappedBytes(0));
+        if(tj3DecompressHeader(tj, jpeg, size)==0 &&
+           tj3Get(tj, TJPARAM_JPEGWIDTH)==w && tj3Get(tj, TJPARAM_JPEGHEIGHT)==h) {
+            const int subsamp=tj3Get(tj, TJPARAM_SUBSAMP);
+            if(subsamp==TJSAMP_420) {
+                unsigned char *planes[3]={y,u,v};
+                int strides[3]={w,cw,cw};
+                decoded=decodePlanes(tj, jpeg, size, planes, strides);
+            } else if(subsamp==TJSAMP_GRAY) {
+                unsigned char *planes[3]={y,nullptr,nullptr};
+                int strides[3]={w,0,0};
+                decoded=decodePlanes(tj, jpeg, size, planes, strides);
+                std::memset(u, 128, size_t(cw)*ch*2);
+            } else if(subsamp>=0) {
+                const int sw=tj3YUVPlaneWidth(1, w, subsamp), sh=tj3YUVPlaneHeight(1, h, subsamp);
+                QByteArray chroma(qsizetype(sw)*sh*2, Qt::Uninitialized);
+                auto *su=reinterpret_cast<uchar*>(chroma.data()), *sv=su+sw*sh;
+                unsigned char *planes[3]={y,su,sv};
+                int strides[3]={w,sw,sw};
+                decoded=decodePlanes(tj, jpeg, size, planes, strides);
+                if(decoded) { resample(su, sw, sh, u, cw, ch); resample(sv, sw, sh, v, cw, ch); }
+            }
+        }
+        m_source.unmap();
+        return decoded;
+    }
+    static bool decodePlanes(tjhandle tj, const uchar *jpeg, size_t size, unsigned char **planes, int *strides) {
+        // Warnings (such as a truncated scan) still yield a usable picture.
+        return tj3DecompressToYUVPlanes8(tj, jpeg, size, planes, strides)==0 ||
+               tj3GetErrorCode(tj)==TJERR_WARNING;
+    }
+    // Box-filter when the source has exactly twice the rows (4:2:2), else nearest.
+    static void resample(const uchar *src, int sw, int sh, uchar *dst, int dw, int dh) {
+        for(int row=0; row<dh; ++row) {
+            uchar *out=dst+qsizetype(row)*dw;
+            if(sw==dw && sh>=2*dh) {
+                const uchar *a=src+qsizetype(2*row)*sw, *b=a+sw;
+                for(int x=0; x<dw; ++x) out[x]=uchar((a[x]+b[x]+1)>>1);
+            } else {
+                const uchar *line=src+qsizetype(std::min(sh-1, int(qint64(row)*sh/dh)))*sw;
+                for(int x=0; x<dw; ++x) out[x]=line[std::min(sw-1, int(qint64(x)*sw/dw))];
+            }
+        }
+    }
+    // Packed 4:2:2 (YUYV or UYVY): keep luma, average chroma over row pairs.
+    bool fromPacked(uchar *y, uchar *u, uchar *v, int y0, int u0, int v0) {
+        if(!m_source.map(QVideoFrame::ReadOnly)) return false;
+        const int w=m_format.frameWidth(), h=m_format.frameHeight(), cw=(w+1)/2;
+        const uchar *src=m_source.bits(0); const int stride=m_source.bytesPerLine(0);
+        for(int row=0; row<h; ++row) {
+            const uchar *line=src+qsizetype(row)*stride;
+            uchar *out=y+qsizetype(row)*w;
+            for(int x=0; x<w; ++x) out[x]=line[(x/2)*4+y0+(x&1)*2];
+            if(row&1) continue;
+            const uchar *next=row+1<h ? line+stride : line;
+            uchar *ou=u+qsizetype(row/2)*cw, *ov=v+qsizetype(row/2)*cw;
+            for(int x=0; x<cw; ++x) {
+                ou[x]=uchar((line[x*4+u0]+next[x*4+u0]+1)>>1);
+                ov[x]=uchar((line[x*4+v0]+next[x*4+v0]+1)>>1);
+            }
+        }
+        m_source.unmap();
+        return true;
+    }
+    // RGB of any layout, via QImage, to limited-range BT.601.
+    bool fromRgb(uchar *y, uchar *u, uchar *v) {
+        const QImage image=m_source.toImage().convertToFormat(QImage::Format_RGB32);
+        const int w=m_format.frameWidth(), h=m_format.frameHeight(), cw=(w+1)/2;
+        if(image.size()!=QSize(w,h)) return false;
+        for(int row=0; row<h; ++row) {
+            const auto *line=reinterpret_cast<const QRgb*>(image.constScanLine(row));
+            uchar *out=y+qsizetype(row)*w;
+            for(int x=0; x<w; ++x) {
+                const int r=qRed(line[x]), g=qGreen(line[x]), b=qBlue(line[x]);
+                out[x]=uchar(((66*r+129*g+25*b+128)>>8)+16);
+            }
+            if(row&1) continue;
+            const auto *next=row+1<h ? reinterpret_cast<const QRgb*>(image.constScanLine(row+1)) : line;
+            uchar *ou=u+qsizetype(row/2)*cw, *ov=v+qsizetype(row/2)*cw;
+            for(int x=0; x<cw; ++x) {
+                const int x1=std::min(2*x+1, w-1);
+                const QRgb p[4]={line[2*x], line[x1], next[2*x], next[x1]};
+                int r=0, g=0, b=0;
+                for(const QRgb c:p) { r+=qRed(c); g+=qGreen(c); b+=qBlue(c); }
+                r=(r+2)/4; g=(g+2)/4; b=(b+2)/4;
+                ou[x]=uchar(((-38*r-74*g+112*b+128)>>8)+128);
+                ov[x]=uchar(((112*r-94*g-18*b+128)>>8)+128);
+            }
+        }
+        return true;
+    }
+    QVideoFrame m_source;
+    QVideoFrameFormat m_format;
+    QByteArray m_planes;
+};
+}
 
 void TakeClock::start(qint64 now) {
     m_start = now; m_completed = 0; m_paused = false;
@@ -50,7 +239,7 @@ Writer::Writer(QObject *parent) : QObject(parent) {
     m_session.setRecorder(&m_recorder);
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
-    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail("The encoder stopped responding, so the take was stopped."); });
+    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail(tr("The encoder stopped responding, so the take was stopped.")); });
     connect(&m_recorder, &QMediaRecorder::errorOccurred, this, [this](auto, const QString &message) { fail(message); });
     connect(&m_recorder, &QMediaRecorder::recorderStateChanged, this, [this](auto state) {
         if (state == QMediaRecorder::StoppedState && m_stopping) {
@@ -110,14 +299,17 @@ void Writer::videoAt(QVideoFrame frame, qint64 position) {
     const qint64 timestamp = qRound64(frameIndex * 1000000.0 / m_fps);
     if (timestamp <= m_lastVideo) return;
     m_tailFrame = frame;
-    // Independent timestamps for the recording copy, without touching the preview's frame.
-    frame = media::withFormat(frame, frame.surfaceFormat());
+    if (Yuv420FrameBuffer::converts(frame.pixelFormat()))
+        frame = QVideoFrame(std::make_unique<Yuv420FrameBuffer>(frame));
+    else
+        // Independent timestamps for the recording copy, without touching the preview's frame.
+        frame = media::withFormat(frame, frame.surfaceFormat());
     frame.setStartTime(timestamp);
     frame.setEndTime(qRound64((frameIndex + 1) * 1000000.0 / m_fps));
     frame.setStreamFrameRate(m_fps);
     m_lastVideo = timestamp;
     // Bounded native-frame references; never build an unbounded 4K frame queue.
-    if (m_frames.size() >= 6) { fail("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped."); return; }
+    if (m_frames.size() >= 6) { fail(tr("Video encoding cannot keep up at this camera's maximum resolution, so the take was stopped.")); return; }
     m_frames.enqueue(frame);
     drain();
 }
@@ -150,7 +342,7 @@ void Writer::padAudioTo(qint64 time) {
     const qint64 missing = qRound64(time * m_audioFormat.sampleRate() / 1000000.0) - m_audioFramesWritten;
     if (missing <= 0) return;
     if (m_audioFormat.durationForFrames(missing) > 500000) {
-        fail("Audio capture fell behind the recording, so the take was stopped."); return;
+        fail(tr("Audio capture fell behind the recording, so the take was stopped.")); return;
     }
     appendAudio(QByteArray(missing * m_audioFormat.bytesPerFrame(),
                           m_audioFormat.sampleFormat() == QAudioFormat::UInt8 ? char(128) : char(0)));
@@ -160,7 +352,7 @@ void Writer::appendAudio(const QByteArray &data) {
     QAudioBuffer buffer(data, m_audioFormat, m_audioFormat.durationForFrames(m_audioFramesWritten));
     m_audioFramesWritten += buffer.frameCount();
     m_queuedAudioUs += buffer.duration();
-    if (m_queuedAudioUs > 500000) { fail("Audio encoding cannot keep up, so the take was stopped."); return; }
+    if (m_queuedAudioUs > 500000) { fail(tr("Audio encoding cannot keep up, so the take was stopped.")); return; }
     m_buffers.enqueue(buffer);
     drain();
 }

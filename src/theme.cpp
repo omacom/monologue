@@ -56,6 +56,15 @@ QString Theme::readAccent(const QString &path) {
     return "#FFD60A";
 }
 
+// Omarchy themes say whether they're light; anything else, or no Omarchy, is dark.
+bool Theme::readLight(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    static const QRegularExpression expression(R"re(^\s*mode\s*=\s*["']light["']\s*(?:#.*)?$)re",
+                                               QRegularExpression::MultilineOption);
+    return expression.match(QString::fromUtf8(file.readAll())).hasMatch();
+}
+
 QString Theme::contrastingColor(const QString &color) {
     const QColor c(color);
     auto linear = [](double v) { return v <= .04045 ? v / 12.92 : std::pow((v + .055) / 1.055, 2.4); };
@@ -78,5 +87,6 @@ void Theme::reload() {
     for (const auto &path : candidates)
         if (QFileInfo::exists(path)) m_watcher.addPath(path);
     const auto accent = readAccent(m_directory + "/theme/colors.toml");
-    if (accent != m_accent) { m_accent = accent; emit changed(); }
+    const bool light = readLight(m_directory + "/theme/colors.toml");
+    if (accent != m_accent || light != m_light) { m_accent = accent; m_light = light; emit changed(); }
 }

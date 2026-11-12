@@ -1,5 +1,6 @@
 #include <linux/videodev2.h>
 #include <QtTest>
+#include <QScopeGuard>
 #include <cstring>
 #include <QTemporaryDir>
 #include <QImage>
@@ -12,11 +13,14 @@
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QAbstractVideoBuffer>
 #include <cmath>
+#include <sys/stat.h>
 #include "mediautils.h"
 #include "theme.h"
 #include "writer.h"
 #include "backend.h"
+#include "translator.h"
 
 class FakePicker : public FilePicker {
 public:
@@ -24,6 +28,22 @@ public:
     void saveVideo(const QUrl &url) override { suggestion=url; }
     void cancel() { emit closed(); }
     void choose(const QUrl &url) { emit closed(); emit selected(url); }
+};
+
+// A camera frame as Qt's V4L2 backend delivers MJPEG: one plane of JPEG bytes.
+class JpegBuffer : public QAbstractVideoBuffer {
+public:
+    JpegBuffer(QByteArray jpeg, QSize size) : m_jpeg(std::move(jpeg)), m_format(size, QVideoFrameFormat::Format_Jpeg) {}
+    QVideoFrameFormat format() const override { return m_format; }
+    MapData map(QVideoFrame::MapMode) override {
+        MapData result; result.planeCount=1;
+        result.data[0]=reinterpret_cast<uchar*>(m_jpeg.data());
+        result.bytesPerLine[0]=result.dataSize[0]=int(m_jpeg.size());
+        return result;
+    }
+private:
+    QByteArray m_jpeg;
+    QVideoFrameFormat m_format;
 };
 
 class Tests : public QObject {
@@ -105,17 +125,60 @@ private slots:
         QVERIFY(!media::copyAtomically(f.fileName(),dir.filePath("missing/copy.mp4")).isEmpty());
         QVERIFY(!media::copyAtomically(f.fileName(),f.fileName()).isEmpty());
         QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(),QByteArray("kept content"));
+        // An encoded partial lands with the permissions of any new file, or of the file it replaces.
+        auto partial=[&] { QTemporaryFile t(dir.filePath(".partial-XXXXXX.mp4")); t.setAutoRemove(false); return t.open() ? t.fileName() : QString(); };
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions(),QFileInfo(dir.filePath("copy with spaces.mp4")).permissions());
+        QVERIFY(QFile::setPermissions(dir.filePath("edited.mp4"),QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup));
+        QVERIFY(media::moveIntoPlace(partial(),dir.filePath("edited.mp4")).isEmpty());
+        QCOMPARE(QFileInfo(dir.filePath("edited.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner|QFile::ReadGroup);
+        {
+            const auto restore=qScopeGuard([umask=::umask(077)] { ::umask(umask); });
+            QVERIFY(media::moveIntoPlace(partial(),dir.filePath("private.mp4")).isEmpty());
+        }
+        QCOMPARE(QFileInfo(dir.filePath("private.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner);
+        // A partial that can't be moved leaves the file it would have replaced alone.
+        QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
+        QVERIFY(QFile::exists(dir.filePath("copy with spaces.mp4")));
+    }
+    void sourceFallsBackWhenTheRememberedOneIsGone() {
+        const QStringList connected{"logi","builtin"};
+        QCOMPARE(media::chooseSource(connected,"builtin","logi"),QString("logi"));
+        // An unplugged Cam Link gives way to the default, or the first source when the default isn't offered (an infrared sensor).
+        QCOMPARE(media::chooseSource(connected,"builtin","camlink"),QString("builtin"));
+        QCOMPARE(media::chooseSource(connected,"infrared","camlink"),QString("logi"));
+        QCOMPARE(media::chooseSource(connected,"builtin",""),QString("builtin"));
+        // With nothing connected, the remembered source stays, so it's shown as unavailable.
+        QCOMPARE(media::chooseSource({},"","camlink"),QString("camlink"));
+    }
+    void thumbnailPastTheLastFrameShowsTheLastOne() {
+        // Past a video's last frame ffmpeg finds nothing, which left the filmstrip
+        // blank at the end. At a frame a second the last of 3 s is at 2 s; at one
+        // every 5 s, the last of 10 s is at 5 s, too far back for a second's step.
+        QTemporaryDir dir;
+        auto video=[&](const QString &name,const QString &rate,int duration) {
+            const auto path=dir.filePath(name); QProcess p;
+            p.start("ffmpeg",{"-v","error","-f","lavfi","-i",QString("testsrc=size=32x32:rate=%1:duration=%2").arg(rate).arg(duration),"-pix_fmt","yuv420p",path});
+            return p.waitForFinished(20000) && p.exitCode()==0 ? path : QString();
+        };
+        const auto perSecond=video("slow.mp4","1",3), perFive=video("slower.mp4","1/5",10);
+        QVERIFY(!perSecond.isEmpty() && !perFive.isEmpty());
+        const auto last=media::thumbnail(perSecond,2.0,36);
+        QVERIFY(!last.isNull()); QVERIFY(media::thumbnail(perSecond,1.0,36)!=last);
+        QCOMPARE(media::thumbnail(perSecond,2.9,36),last);
+        QCOMPARE(media::thumbnail(perFive,9.9,36),media::thumbnail(perFive,5.0,36));
+        QVERIFY(media::thumbnail(perFive,9.9,36)!=media::thumbnail(perFive,0.0,36));
     }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");
         auto write=[](const QString &p,const QByteArray &data) { QFile f(p); if (!f.open(QIODevice::WriteOnly)) return false; return f.write(data)==data.size(); };
         QVERIFY(write(d.filePath("one/colors.toml"),"accent = '#123456' # comment\n"));
-        QVERIFY(write(d.filePath("two/colors.toml"),"accent = \"#fefefe\"\n"));
+        QVERIFY(write(d.filePath("two/colors.toml"),"mode = \"light\"\naccent = \"#fefefe\"\n"));
         QVERIFY(QFile::link(d.filePath("one"),d.filePath("current/theme")));
-        Theme theme(d.filePath("current")); QCOMPARE(theme.accent(),QString("#123456")); QCOMPARE(theme.foreground(),QString("white"));
+        Theme theme(d.filePath("current")); QCOMPARE(theme.accent(),QString("#123456")); QCOMPARE(theme.foreground(),QString("white")); QVERIFY(!theme.light());
         QVERIFY(QFile::remove(d.filePath("current/theme"))); QVERIFY(QFile::link(d.filePath("two"),d.filePath("current/theme")));
-        QTRY_COMPARE(theme.accent(),QString("#fefefe")); QCOMPARE(theme.foreground(),QString("black"));
-        QVERIFY(write(d.filePath("two/colors.toml"),"accent = '#333333'\n")); QTRY_COMPARE(theme.accent(),QString("#333333"));
+        QTRY_COMPARE(theme.accent(),QString("#fefefe")); QCOMPARE(theme.foreground(),QString("black")); QVERIFY(theme.light());
+        QVERIFY(write(d.filePath("two/colors.toml"),"accent = '#333333'\n")); QTRY_COMPARE(theme.accent(),QString("#333333")); QVERIFY(!theme.light());
         QVERIFY(QFile::remove(d.filePath("two/colors.toml"))); QTRY_COMPARE(theme.accent(),QString("#FFD60A"));
     }
     void liveRounding() {
@@ -131,6 +194,46 @@ private slots:
         QVERIFY(write(response,"{\"int\":0}")); QTRY_COMPARE(theme.radius(),0);
         QVERIFY(write(response,"{\"int\":8}")); QTRY_COMPARE(theme.radius(),8);
         QVERIFY(write(response,"unavailable")); QTest::qWait(1200); QCOMPARE(theme.radius(),8);
+    }
+    void translatorFollowsTheLanguageFile() {
+        QTemporaryDir dir;
+        // A Translator sets the application's locale and direction; put them back however the test ends.
+        const auto restore=qScopeGuard([locale=QLocale(),direction=QGuiApplication::layoutDirection()] { QLocale::setDefault(locale); QGuiApplication::setLayoutDirection(direction); });
+        auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
+        Translator english(dir.filePath("language"),dir.path());
+        QCOMPARE(english.language(),QString("en")); QVERIFY(english.translate("Backend","Save").isNull());
+        QVERIFY(write(dir.filePath("language"),"pt-BR\n"));
+        QVERIFY(write(dir.filePath("pt.json"),R"({"Save": "Guardar", "Retry": "Tentar de novo"})"));
+        QVERIFY(write(dir.filePath("pt-BR.json"),R"({"Save": "Salvar"})"));
+        Translator translator(dir.filePath("language"),dir.path());
+        QCOMPARE(translator.language(),QString("pt-BR"));
+        QCOMPARE(translator.translate("Backend","Save"),QString("Salvar"));
+        QCOMPARE(translator.translate("Backend","Retry"),QString("Tentar de novo"));
+        QVERIFY(translator.translate("Backend","Quit").isNull());
+        QVERIFY(write(dir.filePath("language"),"da\n")); QTRY_COMPARE(translator.language(),QString("da"));
+        QVERIFY(translator.translate("Backend","Save").isNull());
+        // A first pick can create Omarchy's config directory, too.
+        const QString later=dir.filePath("config/omarchy/language");
+        Translator fresh(later,dir.path());
+        QCOMPARE(fresh.language(),QString("en"));
+        QVERIFY(QDir().mkpath(QFileInfo(later).absolutePath()));
+        QVERIFY(write(later,"pt\n")); QTRY_COMPARE(fresh.language(),QString("pt"));
+        QCOMPARE(fresh.translate("Backend","Retry"),QString("Tentar de novo"));
+    }
+    void translatorPicksPluralFormsByCatalog() {
+        QTemporaryDir dir;
+        // A Translator sets the application's locale and direction; put them back however the test ends.
+        const auto restore=qScopeGuard([locale=QLocale(),direction=QGuiApplication::layoutDirection()] { QLocale::setDefault(locale); QGuiApplication::setLayoutDirection(direction); });
+        auto write=[](const QString &path,const QByteArray &data) { QFile f(path); return f.open(QIODevice::WriteOnly) && f.write(data)==data.size(); };
+        QVERIFY(write(dir.filePath("language"),"ru\n"));
+        QVERIFY(write(dir.filePath("en.json"),R"({"%n clips": {"one": "%n clip", "other": "%n clips"}, "%n takes": {"one": "%n take", "other": "%n takes"}})"));
+        QVERIFY(write(dir.filePath("ru.json"),R"({"%n clips": {"one": "%n клип", "few": "%n клипа", "many": "%n клипов", "other": "%n клипа"}})"));
+        Translator translator(dir.filePath("language"),dir.path());
+        QCOMPARE(translator.translate("EditBar","%n clips",nullptr,21),QString("%n клип"));
+        QCOMPARE(translator.translate("EditBar","%n clips",nullptr,25),QString("%n клипов"));
+        // A counted string Russian lacks falls back to English with English rules: 21 is "one" in Russian, plural in English.
+        QCOMPARE(translator.translate("EditBar","%n takes",nullptr,21),QString("%n takes"));
+        QCOMPARE(translator.translate("EditBar","%n takes",nullptr,1),QString("%n take"));
     }
     void realEncoding_data() { QTest::addColumn<bool>("sound"); QTest::newRow("silent")<<false; QTest::newRow("audio")<<true; }
     void realEncoding() {
@@ -339,13 +442,65 @@ private slots:
         QCOMPARE(backend.clips().size(),1);
         backend.closeTake();
     }
+    void jpegFramesRecordAs420() {
+        // Webcams send their largest modes as 4:2:2 MJPEG. Recording them as
+        // RGB made Qt pick a 12-bit 4:4:4 target that NVENC rejects, leaving
+        // software x264 at 4:4:4, too slow at 4K. They must arrive as 4:2:0.
+        QTemporaryDir directory;
+        const auto jpegPath=directory.filePath("frame.jpg"), path=directory.filePath("jpeg.mp4");
+        QProcess encode;
+        encode.start("ffmpeg",{"-v","error","-f","lavfi","-i","color=red:s=320x240","-frames:v","1","-pix_fmt","yuvj422p",jpegPath});
+        QVERIFY(encode.waitForFinished(20000)); QCOMPARE(encode.exitCode(),0);
+        QFile file(jpegPath); QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto jpeg=file.readAll();
+        const auto frame=[&] { return QVideoFrame(std::make_unique<JpegBuffer>(jpeg,QSize(320,240))); };
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,frame().surfaceFormat(),30,QAudioFormat(),0));
+        for(int i=0;i<15;++i) { writer.video(frame(),qRound64(i*1000000.0/30)); QTest::qWait(33); }
+        writer.pause(500000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess probe;
+        probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,width,height","-of","csv=p=0",path});
+        QVERIFY(probe.waitForFinished()); QCOMPARE(probe.exitCode(),0);
+        const auto stream=QString::fromUtf8(probe.readAllStandardOutput()).trimmed();
+        QVERIFY2(stream.startsWith("320,240,yuv") && stream.endsWith("420p"),qPrintable(stream));
+        QProcess pixels;
+        pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
+        QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
+        const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
+        QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,qPrintable(rgb.toHex()));
+    }
+    void relabelledCameraRecordsItsColorSpace() {
+        // A Cam Link sends packed 4:2:2 that Qt labels BT.601; once relabelled from
+        // the driver's BT.709, the 4:2:0 recording must carry BT.709 too.
+        QTemporaryDir directory;
+        const auto path=directory.filePath("709.mp4");
+        QVideoFrameFormat yuyv(QSize(320,240),QVideoFrameFormat::Format_YUYV);
+        auto bt709=yuyv; bt709.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
+        QAudioFormat audio; audio.setSampleRate(48000); audio.setChannelCount(1); audio.setSampleFormat(QAudioFormat::Int16);
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,bt709,30,audio,0));
+        for(int i=0;i<30;++i) {
+            QVideoFrame frame(yuyv); QVERIFY(frame.map(QVideoFrame::WriteOnly));
+            for(int y=0;y<240;++y) { auto *row=frame.bits(0)+y*frame.bytesPerLine(0); for(int x=0;x<320*2;x+=4) { row[x]=row[x+2]=128; row[x+1]=60; row[x+3]=200; } }
+            frame.unmap();
+            writer.video(media::withFormat(frame,bt709),qRound64(i*1000000.0/30));
+            writer.audio(QByteArray(1600*2,0),qRound64(i*1000000.0/30));
+            QTest::qWait(33);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        QProcess probe; probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,color_space","-of","csv=p=0",path});
+        QVERIFY(probe.waitForFinished());
+        QCOMPARE(QString::fromUtf8(probe.readAllStandardOutput()).trimmed(),QString("yuv420p,bt709"));
+    }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;
         const auto path=directory.filePath("sync.mp4");
         QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(1); format.setSampleFormat(QAudioFormat::Int16);
         Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
-        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(64,64),QVideoFrameFormat::Format_BGRA8888),30,format,0));
-        QImage first(64,64,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,format,0));
+        QImage first(320,240,QImage::Format_RGB32); first.fill(Qt::black); writer.video(QVideoFrame(first),0);
         int nextVideo=0, nextAudio=0;
         bool paused=false,resumed=false,finished=false;
         const QList<qint64> events{300000,966667,2300000,2966667};
@@ -357,7 +512,7 @@ private slots:
             // 80 ms plus the 20 ms buffer itself. Both describe the same events.
             while(qRound64(nextVideo*1000000.0/30)+33333<=delivered) {
                 const qint64 captured=qRound64(nextVideo*1000000.0/30);
-                QImage image(64,64,QImage::Format_RGB32);
+                QImage image(320,240,QImage::Format_RGB32);
                 image.fill(events.contains(captured)?Qt::white:Qt::black);
                 writer.video(QVideoFrame(image),captured); ++nextVideo;
             }
@@ -410,6 +565,10 @@ private slots:
 };
 int main(int argc,char**argv) {
     qputenv("QT_MEDIA_BACKEND","ffmpeg");
+    // Offscreen however it's started, so a test never opens a window on the desktop.
+    qputenv("QT_QPA_PLATFORM","offscreen");
+    // The desktop's platform theme plugin has no place in a test run.
+    qputenv("QT_QPA_PLATFORMTHEME","");
     QTemporaryDir config;
     qputenv("XDG_CONFIG_HOME",config.filePath("config").toUtf8());
     qputenv("XDG_DATA_HOME",config.filePath("data").toUtf8());

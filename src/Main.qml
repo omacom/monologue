@@ -11,15 +11,20 @@ ApplicationWindow {
     minimumWidth: 720; minimumHeight: 460
     visible: true
     title: "monologue"
-    color: "#0e0e10"
-    Material.theme: Material.Dark
+    // The chrome follows the Omarchy theme's light or dark mode; the camera picture and what sits on it stay dark.
+    color: win.light ? "#f4f4f5" : "#0e0e10"
+    Material.theme: win.light ? Material.Light : Material.Dark
+    readonly property bool light: theme.light
     Material.accent: theme.accent
     readonly property color accent: theme.accent
     readonly property color accentForeground: theme.foreground
     readonly property int cornerRadius: theme.radius
+    // Right-to-left languages mirror the window; the Translator sets the application's layout direction.
+    // Popups don't inherit it, so each dialog's content and buttons opt in too.
+    readonly property bool rightToLeft: Qt.application.layoutDirection === Qt.RightToLeft
     readonly property bool finished: backend.state === "finished" || backend.state === "saving"
     readonly property bool busy: backend.state === "finalizing" || backend.state === "saving"
-    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || helpDialog.visible || backend.dialogOpen
+    readonly property bool overlayOpen: closeDialog.visible || unsavedDialog.visible || restartDialog.visible || overwriteDialog.visible || helpDialog.visible || backend.dialogOpen
     property bool quitting: false
     property var playbackOutput: null
     function time(seconds) {
@@ -146,16 +151,26 @@ ApplicationWindow {
     Shortcut { sequence: "S"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: backend.split(editBar.playheadSec) }
     Shortcut { sequences: ["X", "Delete", "Backspace"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing && !win.controlFocused; onActivated: win.removeOrRestore() }
     Shortcut { sequence: "Ctrl+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(true) }
-    Shortcut { sequence: "Alt+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(false) }
+    // Alt+Space is Omarchy's dictation key, so Hyprland takes it before the app sees it.
+    Shortcut { sequence: "Ctrl+Shift+Space"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: win.trimToPlayhead(false) }
     Shortcut { sequence: "Z"; context: Qt.WindowShortcut; autoRepeat: false; enabled: win.editing; onActivated: editBar.toggleZoom() }
     Shortcut { sequence: "Ctrl+Z"; context: Qt.WindowShortcut; enabled: win.editing && backend.canUndo; onActivated: backend.undo() }
     Shortcut { sequences: ["Ctrl+Shift+Z", "Ctrl+Y"]; context: Qt.WindowShortcut; enabled: win.editing && backend.canRedo; onActivated: backend.redo() }
-    Shortcut { sequence: "Q"; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
-    Shortcut { sequence: "?"; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
+    Shortcut { sequences: ["Q", "Ctrl+Q", "Ctrl+W"]; context: Qt.WindowShortcut; autoRepeat: false; enabled: !win.overlayOpen; onActivated: win.closeSafely() }
+    Shortcut { sequences: ["?", "F1", "Ctrl+?"]; context: Qt.WindowShortcut; enabled: !win.overlayOpen; onActivated: helpDialog.open() }
 
-    readonly property color textColor: "#eeeef0"
-    readonly property color dimColor: "#8d8d96"
-    readonly property color faintColor: "#5c5c64"
+    readonly property color textColor: light ? "#18181b" : "#eeeef0"
+    readonly property color strongColor: light ? "#000000" : "#ffffff"
+    readonly property color dimColor: light ? "#63636b" : "#8d8d96"
+    readonly property color faintColor: light ? "#a1a1aa" : "#5c5c64"
+    readonly property color surfaceColor: light ? "#ffffff" : "#202023"
+    readonly property color borderColor: light ? "#d4d4d8" : "#39393e"
+    readonly property color controlColor: light ? "#e4e4e7" : "#2c2c2f"
+    readonly property color controlHoverColor: light ? "#d4d4d8" : "#3a3a3e"
+    readonly property color flatHoverColor: light ? "#e9e9ec" : "#1f1f23"
+    readonly property color roundColor: light ? "#e4e4e7" : "#26262a"
+    readonly property color roundHoverColor: light ? "#d4d4d8" : "#34343a"
+    readonly property color trackColor: light ? "#d4d4d8" : "#2a2a2e"
     readonly property color recordColor: "#f0605c"
     readonly property var icons: ({
         camera: "M4.5 6h9a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z M15.5 10.5l6-3.5v10l-6-3.5z",
@@ -191,6 +206,8 @@ ApplicationWindow {
         property bool iconFilled: false
         // 0–1 fills the button as a progress bar; -1 is an ordinary button.
         property real progress: -1
+        // Styled text shown in place of text, like a dialog choice's underlined letter.
+        property string markup: ""
         padding: 14; topPadding: 10; bottomPadding: 10
         font.pixelSize: 13; font.weight: Font.DemiBold
         focusPolicy: Qt.TabFocus
@@ -203,12 +220,12 @@ ApplicationWindow {
                 anchors.centerIn: parent
                 spacing: 8; opacity: button.enabled ? 1 : .4
                 Icon { visible: button.iconPath !== ""; path: button.iconPath; filled: button.iconFilled; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
-                Text { visible: button.text !== ""; text: button.text; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
+                Text { visible: button.text !== ""; text: button.markup || button.text; textFormat: button.markup ? Text.StyledText : Text.PlainText; font: button.font; color: button.foreground; anchors.verticalCenter: parent.verticalCenter }
             }
         }
         background: Rectangle {
             radius: win.cornerRadius; clip: true
-            color: button.progress >= 0 ? "#2c2c2f" : button.primary ? win.accent : button.flat ? (button.hovered ? "#1f1f23" : "transparent") : button.hovered ? "#3a3a3e" : "#2c2c2f"
+            color: button.progress >= 0 ? win.controlColor : button.primary ? win.accent : button.flat ? (button.hovered ? win.flatHoverColor : "transparent") : button.hovered ? win.controlHoverColor : win.controlColor
             opacity: button.enabled ? 1 : .4
             border.width: button.activeFocus ? 2 : 0; border.color: button.primary ? win.accentForeground : win.accent
             Rectangle {
@@ -227,19 +244,39 @@ ApplicationWindow {
         focus: true
         Material.roundedScale: win.cornerRadius
         Material.elevation: 0
-        background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.color: "#39393e" }
+        background: Rectangle { color: win.surfaceColor; radius: win.cornerRadius; border.color: win.borderColor }
         Overlay.modal: Rectangle { color: "#99000000" }
         header: Label {
-            text: dialog.title; color: "#eeeef0"; font.pixelSize: 22
+            text: dialog.title; color: win.textColor; font.pixelSize: 22
             padding: 24; bottomPadding: 0; elide: Text.ElideRight
         }
         footer: DialogButtonBox {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             Material.roundedScale: win.cornerRadius
             background: Item { }
             visible: count > 0
             delegate: ActionButton { }
         }
+        // The choice Enter takes when the dialog opens.
+        property Item defaultButton: null
+        onOpened: if (defaultButton) defaultButton.forceActiveFocus()
         onClosed: liveVideo.forceActiveFocus()
+    }
+    // A dialog choice, as in Plain and Omawrite: "<u>D</u>iscard" is pressed by D
+    // or Alt+D, and Tab or the arrow keys move along the row, wrapping around.
+    component ChoiceButton: ActionButton {
+        id: choice
+        text: markup.replace(/<\/?u>/g, "")
+        readonly property string key: (markup.match(/<u>(.)<\/u>/) || ["", ""])[1].toUpperCase()
+        Shortcut { sequences: choice.key ? [choice.key, "Alt+" + choice.key] : []; enabled: choice.visible && choice.enabled; onActivated: choice.clicked() }
+        function step(by) {
+            const row = Array.from(parent.children).filter(item => item.visible && item.markup !== undefined)
+            row[(row.indexOf(choice) + by + row.length) % row.length].forceActiveFocus()
+        }
+        Keys.onTabPressed: step(1)
+        Keys.onBacktabPressed: step(-1)
+        Keys.onLeftPressed: step(win.rightToLeft ? 1 : -1)
+        Keys.onRightPressed: step(win.rightToLeft ? -1 : 1)
     }
     // A source reads as quiet text with an icon; the dropdown appears on click.
     component SourceChoice: ComboBox {
@@ -261,12 +298,12 @@ ApplicationWindow {
             Label {
                 Layout.maximumWidth: choice.maximumTextWidth; elide: Text.ElideRight; font: choice.font
                 text: choice.displayText
-                color: choice.activeFocus ? win.accent : choice.enabled ? (choice.hovered ? "#ffffff" : win.textColor) : win.dimColor
+                color: choice.activeFocus ? win.accent : choice.enabled ? (choice.hovered ? win.strongColor : win.textColor) : win.dimColor
             }
             Icon { visible: choice.enabled; path: win.icons.chevron; implicitWidth: 12; implicitHeight: 12; color: win.dimColor }
         }
         popup.width: Math.max(280, choice.width)
-        popup.background: Rectangle { color: "#202023"; radius: win.cornerRadius; border.color: "#39393e" }
+        popup.background: Rectangle { color: win.surfaceColor; radius: win.cornerRadius; border.color: win.borderColor }
         ToolTip {
             visible: choice.hovered && choice.currentText !== ""
             text: choice.detail !== "" ? choice.currentText + "\n" + choice.detail : choice.currentText
@@ -300,7 +337,7 @@ ApplicationWindow {
         opacity: enabled ? 1 : .4
         Rectangle {
             anchors.fill: parent; radius: width / 2
-            color: win.finished ? (shutter.hovered ? "#34343a" : "#26262a") : "transparent"
+            color: win.finished ? (shutter.hovered ? win.roundHoverColor : win.roundColor) : "transparent"
             border.width: win.finished ? (shutter.activeFocus ? 2 : 0) : 3
             border.color: shutter.activeFocus ? win.accent : shutter.recording ? win.recordColor : win.textColor
         }
@@ -327,6 +364,8 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent; spacing: 0
+        LayoutMirroring.enabled: win.rightToLeft
+        LayoutMirroring.childrenInherit: true
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumHeight: 120
             color: "black"; clip: true
@@ -341,9 +380,10 @@ ApplicationWindow {
                 visible: backend.state === "unavailable" || backend.state === "starting"
                 Label {
                     width: parent.width; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 15
-                    text: backend.state === "starting" ? "Connecting your camera and microphone…" : backend.message
+                    color: "#eeeef0"
+                    text: backend.state === "starting" ? qsTr("Connecting your camera and microphone…") : backend.message
                 }
-                ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: "Retry"; onClicked: backend.retry() }
+                ActionButton { anchors.horizontalCenter: parent.horizontalCenter; visible: backend.state === "unavailable"; text: qsTr("Retry"); onClicked: backend.retry() }
             }
             Rectangle {
                 visible: backend.message !== "" && backend.state !== "unavailable" && !win.busy
@@ -358,16 +398,16 @@ ApplicationWindow {
             visible: !win.finished && backend.state !== "finalizing"
             Layout.fillWidth: true; implicitHeight: 5; z: 1
             Rectangle {
-                id: meter; anchors.fill: parent; color: "#2a2a2e"
+                id: meter; anchors.fill: parent; color: win.trackColor
                 readonly property real fraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.level + 60) / 60)) : 0
                 readonly property real peakFraction: backend.audioEnabled ? Math.max(0, Math.min(1, (backend.peakLevel + 60) / 60)) : 0
                 Rectangle {
                     width: meter.fraction * parent.width; height: parent.height
-                    color: backend.clipping || backend.level >= -3 ? win.recordColor : backend.level >= -12 ? "#e2c77c" : "#8fc38a"
+                    color: backend.clipping || backend.level >= -3 ? win.recordColor : backend.level >= -12 ? (win.light ? "#c9a227" : "#e2c77c") : (win.light ? "#5f9e59" : "#8fc38a")
                 }
-                Rectangle { visible: meter.peakFraction > 0; x: meter.peakFraction * (parent.width - width); width: 2; height: parent.height; color: backend.clipping ? win.recordColor : "#c9c9d0" }
+                Rectangle { visible: meter.peakFraction > 0; x: meter.peakFraction * (parent.width - width); width: 2; height: parent.height; color: backend.clipping ? win.recordColor : win.light ? "#52525b" : "#c9c9d0" }
                 Accessible.role: Accessible.Indicator
-                Accessible.name: "Microphone level: " + backend.meterText
+                Accessible.name: qsTr("Microphone level: %1").arg(backend.meterText)
             }
         }
         Item {
@@ -379,7 +419,7 @@ ApplicationWindow {
                 id: finishing; objectName: "finishingStrip"
                 visible: backend.state === "finalizing"
                 anchors.fill: parent; anchors.topMargin: 3; anchors.bottomMargin: 3
-                radius: Math.min(6, win.cornerRadius); color: "#1c1c1e"; clip: true
+                radius: Math.min(6, win.cornerRadius); color: win.light ? "#e4e4e7" : "#1c1c1e"; clip: true
                 Rectangle {
                     id: sweep
                     width: parent.width / 4; height: 2; anchors.bottom: parent.bottom
@@ -389,7 +429,7 @@ ApplicationWindow {
                         from: -sweep.width; to: finishing.width; duration: 1100; easing.type: Easing.InOutSine
                     }
                 }
-                Label { anchors.centerIn: parent; text: "Finishing your take…"; color: win.dimColor; font.pixelSize: 12 }
+                Label { anchors.centerIn: parent; text: qsTr("Finishing your take…"); color: win.dimColor; font.pixelSize: 12 }
             }
             EditBar {
                 id: editBar; objectName: "editBar"
@@ -416,7 +456,7 @@ ApplicationWindow {
                         model: backend.cameras; currentIndex: backend.cameraIndex
                         enabled: !backend.takeActive && !win.busy
                         onActivated: index => { backend.selectCamera(index); liveVideo.forceActiveFocus() }
-                        Accessible.name: "Camera"
+                        Accessible.name: qsTr("Camera")
                     }
                     SourceChoice {
                         id: microphoneChoice; iconPath: win.icons.microphone
@@ -424,12 +464,12 @@ ApplicationWindow {
                         model: backend.microphones; currentIndex: backend.microphoneIndex
                         enabled: !backend.takeActive && !win.busy
                         onActivated: index => { backend.selectMicrophone(index); liveVideo.forceActiveFocus() }
-                        Accessible.name: "Microphone"
+                        Accessible.name: qsTr("Microphone")
                     }
                 }
                 ActionButton {
                     objectName: "newRecording"
-                    visible: win.finished; flat: true; iconPath: win.icons.back; text: "New recording"
+                    visible: win.finished; flat: true; iconPath: win.icons.back; text: qsTr("New recording")
                     anchors.left: parent.left; anchors.leftMargin: -14; anchors.verticalCenter: parent.verticalCenter
                     enabled: !win.busy && !backend.dialogOpen
                     onClicked: win.leaveTake("new")
@@ -446,7 +486,7 @@ ApplicationWindow {
                 Shutter {
                     id: recordButton
                     enabled: !win.busy && !backend.dialogOpen && (win.finished || backend.ready || backend.takeActive)
-                    Accessible.name: win.finished ? "Play or pause clip" : backend.takeActive ? "Stop" : "Record"
+                    Accessible.name: win.finished ? qsTr("Play or pause clip") : backend.takeActive ? qsTr("Stop") : qsTr("Record")
                     onClicked: {
                         if (win.finished) win.togglePlayback()
                         else if (backend.takeActive) backend.finish()
@@ -459,14 +499,14 @@ ApplicationWindow {
                     RoundButton {
                         id: pauseButton
                         visible: backend.takeActive; enabled: !win.busy
-                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                         width: 40; height: 40; padding: 0; flat: true
                         focusPolicy: Qt.TabFocus
                         readonly property bool paused: backend.state === "paused"
-                        Accessible.name: paused ? "Resume" : "Pause"
-                        ToolTip.visible: hovered; ToolTip.text: (paused ? "Resume" : "Pause") + " (Space)"
+                        Accessible.name: paused ? qsTr("Resume") : qsTr("Pause")
+                        ToolTip.visible: hovered; ToolTip.text: paused ? qsTr("Resume (Space)") : qsTr("Pause (Space)")
                         background: Rectangle {
-                            radius: width / 2; color: pauseButton.hovered ? "#34343a" : "#26262a"
+                            radius: width / 2; color: pauseButton.hovered ? win.roundHoverColor : win.roundColor
                             border.width: pauseButton.activeFocus ? 2 : 0; border.color: win.accent
                         }
                         contentItem: Item {
@@ -477,9 +517,9 @@ ApplicationWindow {
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                     }
                     Label {
-                        visible: win.finished; anchors.verticalCenter: parent.verticalCenter
+                        visible: win.finished; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                         text: win.preciseTime(backend.keptDuration); font.family: "monospace"; font.pixelSize: 13; color: win.dimColor
-                        ToolTip.visible: keptHover.hovered; ToolTip.text: "Length of all clips"
+                        ToolTip.visible: keptHover.hovered; ToolTip.text: qsTr("Length of all clips")
                         HoverHandler { id: keptHover }
                     }
                 }
@@ -495,7 +535,7 @@ ApplicationWindow {
                     enabled: !backend.dialogOpen
                     Layout.minimumWidth: 116
                     progress: saving ? backend.saveProgress : -1
-                    text: saving ? (backend.saveProgress > 0 ? "Saving " + Math.floor(backend.saveProgress * 100) + "%" : "Saving…") : "Save"
+                    text: saving ? (backend.saveProgress > 0 ? qsTr("Saving %1%").arg(Math.floor(backend.saveProgress * 100)) : qsTr("Saving…")) : qsTr("Save")
                     onClicked: { if (saving) return; player.pause(); backend.save() }
                 }
             }
@@ -527,85 +567,98 @@ ApplicationWindow {
     }
     Component { id: playbackAudio; AudioOutput {} }
     ThemedDialog {
-        id: closeDialog; anchors.centerIn: parent; modal: true; title: "Quit and discard this take?"
+        id: closeDialog; anchors.centerIn: parent; modal: true; title: qsTr("Quit and discard this take?")
         closePolicy: Popup.CloseOnEscape
+        defaultButton: stopAndEdit
         ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 16
-            Label { text: "Quitting deletes the take you're recording. Stop to edit and save it first."; wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
+            Label { text: qsTr("Quitting deletes the take you're recording. Stop to edit and save it first."); wrapMode: Text.WordWrap; Layout.maximumWidth: 420 }
             RowLayout {
-                ActionButton { text: "Keep recording"; onClicked: closeDialog.close() }
-                ActionButton { text: "Discard and quit"; onClicked: { closeDialog.close(); backend.discardAndClose() } }
-                ActionButton { text: "Stop and edit"; primary: true; onClicked: { closeDialog.close(); backend.finish() } }
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { markup: qsTr("<u>K</u>eep recording"); onClicked: closeDialog.close() }
+                ChoiceButton { markup: qsTr("<u>D</u>iscard and quit"); onClicked: { closeDialog.close(); backend.discardAndClose() } }
+                ChoiceButton { id: stopAndEdit; markup: qsTr("<u>S</u>top and edit"); primary: true; onClicked: { closeDialog.close(); backend.finish() } }
             }
         }
     }
     ThemedDialog {
         id: unsavedDialog; objectName: "unsavedDialog"
-        anchors.centerIn: parent; modal: true; title: "Discard this take?"
+        anchors.centerIn: parent; modal: true; title: qsTr("Discard this take?")
         width: Math.min(win.width-40,460)
         closePolicy: Popup.CloseOnEscape
+        defaultButton: unsavedSave
         property string action: "new"
         ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             width: parent.width; spacing: 16
-            Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: "You haven't saved this take since your last change. " + (unsavedDialog.action === "quit" ? "Quitting" : "Starting a new recording") + " deletes it." }
+            Label {
+                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                text: unsavedDialog.action === "quit" ? qsTr("You haven't saved this take since your last change. Quitting deletes it.")
+                                                      : qsTr("You haven't saved this take since your last change. Starting a new recording deletes it.")
+            }
             RowLayout {
                 Layout.alignment: Qt.AlignRight
-                ActionButton { text: "Cancel"; onClicked: unsavedDialog.close() }
-                ActionButton { objectName: "unsavedDiscard"; text: unsavedDialog.action === "quit" ? "Discard and quit" : "Discard"; onClicked: { unsavedDialog.close(); win.leave(unsavedDialog.action) } }
-                ActionButton { text: "Save…"; primary: true; onClicked: { unsavedDialog.close(); backend.save() } }
+                ChoiceButton { markup: qsTr("<u>C</u>ancel"); onClicked: unsavedDialog.close() }
+                ChoiceButton { objectName: "unsavedDiscard"; markup: unsavedDialog.action === "quit" ? qsTr("<u>D</u>iscard and quit") : qsTr("<u>D</u>iscard"); onClicked: { unsavedDialog.close(); win.leave(unsavedDialog.action) } }
+                ChoiceButton { id: unsavedSave; objectName: "unsavedSave"; markup: qsTr("<u>S</u>ave…"); primary: true; onClicked: { unsavedDialog.close(); backend.save() } }
             }
         }
     }
     ThemedDialog {
         id: restartDialog; objectName: "restartDialog"
-        anchors.centerIn: parent; modal: true; title: "Discard this clip and start over?"
+        anchors.centerIn: parent; modal: true; title: qsTr("Discard this clip and start over?")
         width: Math.min(win.width-40,460)
         closePolicy: Popup.CloseOnEscape
         enter: Transition { }
         exit: Transition { }
-        onOpened: restartConfirm.forceActiveFocus()
-        footer: DialogButtonBox {
-            Material.roundedScale: win.cornerRadius
-            background: Item { }
-            ActionButton {
-                id: restartCancel; objectName: "restartCancel"; text: "Cancel"
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-                KeyNavigation.tab: restartConfirm; KeyNavigation.backtab: restartConfirm
-                KeyNavigation.left: restartConfirm; KeyNavigation.right: restartConfirm
-            }
-            ActionButton {
-                id: restartConfirm; objectName: "restartConfirm"; text: "Confirm"; primary: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-                KeyNavigation.tab: restartCancel; KeyNavigation.backtab: restartCancel
-                KeyNavigation.left: restartCancel; KeyNavigation.right: restartCancel
+        defaultButton: restartConfirm
+        ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
+            width: parent.width; spacing: 16
+            Label { Layout.fillWidth: true; text: qsTr("This deletes the current take. Anything you saved stays where you saved it."); wrapMode: Text.WordWrap }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { id: restartCancel; objectName: "restartCancel"; markup: qsTr("<u>C</u>ancel"); onClicked: restartDialog.reject() }
+                ChoiceButton { id: restartConfirm; objectName: "restartConfirm"; markup: qsTr("<u>D</u>iscard"); primary: true; onClicked: restartDialog.accept() }
             }
         }
-        Label { width: parent.width; text: "This deletes the current take. Anything you saved stays where you saved it."; wrapMode: Text.WordWrap }
         onAccepted: { player.stop(); backend.discardCurrent() }
     }
     ThemedDialog {
-        id: overwriteDialog; anchors.centerIn: parent; modal: true; title: "Replace the existing MP4?"
+        id: overwriteDialog; objectName: "overwriteDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Replace the existing MP4?")
         property string targetPath: ""
         width: Math.min(win.width-40,460)
-        standardButtons: Dialog.Yes | Dialog.No
-        Label { width: parent.width; text: overwriteDialog.targetPath + " already exists."; wrapMode: Text.WrapAnywhere }
+        closePolicy: Popup.CloseOnEscape
+        defaultButton: overwriteReplace
+        ColumnLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
+            width: parent.width; spacing: 16
+            Label { Layout.fillWidth: true; text: qsTr("%1 already exists.").arg(overwriteDialog.targetPath); wrapMode: Text.WrapAnywhere }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                ChoiceButton { markup: qsTr("<u>C</u>ancel"); onClicked: overwriteDialog.reject() }
+                ChoiceButton { id: overwriteReplace; objectName: "overwriteReplace"; markup: qsTr("<u>R</u>eplace"); primary: true; onClicked: overwriteDialog.accept() }
+            }
+        }
         onAccepted: backend.confirmOverwrite(true)
         onRejected: backend.confirmOverwrite(false)
     }
     ThemedDialog {
-        id: helpDialog; anchors.centerIn: parent; modal: true; title: "Keyboard shortcuts"; standardButtons: Dialog.Close
+        id: helpDialog; objectName: "helpDialog"; anchors.centerIn: parent; modal: true; title: qsTr("Keyboard shortcuts"); standardButtons: Dialog.Close
         RowLayout {
+            LayoutMirroring.enabled: win.rightToLeft; LayoutMirroring.childrenInherit: true
             spacing: 40
             ShortcutList {
-                Layout.alignment: Qt.AlignTop; heading: "Recording"
-                rows: [["Space", "Record / pause / resume"], ["Enter", "Stop and edit"], ["Esc", "Discard and start over"], ["Q", "Quit"], ["?", "Show shortcuts"]]
+                Layout.alignment: Qt.AlignTop; heading: qsTr("Recording")
+                rows: [["Space", qsTr("Record / pause / resume")], ["Enter", qsTr("Stop and edit")], ["Esc", qsTr("Discard and start over")], ["Q", qsTr("Quit (Ctrl+Q, Ctrl+W)")], ["?", qsTr("Show shortcuts (F1)")]]
             }
             ShortcutList {
-                Layout.alignment: Qt.AlignTop; heading: "Editing"
-                rows: [["Space", "Play / pause"], ["← →", "Move 1 s (Shift 5 s, Alt 0.2 s)"], ["[ ]", "Previous / next pause or clip edge"],
-                       ["S", "Split the clip at the playhead"], ["X", "Remove the clip, or restore the gap"],
-                       ["Ctrl+Space", "Clip start to playhead"], ["Alt+Space", "Clip end to playhead"],
-                       ["Ctrl+Z", "Undo (Ctrl+Shift+Z redo)"], ["Z", "Zoom to the clip"], ["Ctrl+S", "Save"], ["Esc", "Discard and start over"]]
+                Layout.alignment: Qt.AlignTop; heading: qsTr("Editing")
+                rows: [["Space", qsTr("Play / pause")], ["← →", qsTr("Move 1 s (Shift 5 s, Alt 0.2 s)")], ["[ ]", qsTr("Previous / next pause or clip edge")],
+                       ["S", qsTr("Split the clip at the playhead")], ["X", qsTr("Remove the clip, or restore the gap")],
+                       ["Ctrl+Space", qsTr("Clip start to playhead")], ["Ctrl+Shift+Space", qsTr("Clip end to playhead")],
+                       ["Ctrl+Z", qsTr("Undo (Ctrl+Shift+Z redo)")], ["Z", qsTr("Zoom to the clip")], ["Ctrl+S", qsTr("Save")], ["Esc", qsTr("Discard and start over")]]
             }
         }
     }
