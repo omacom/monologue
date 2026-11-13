@@ -617,26 +617,30 @@ private slots:
             }
             QVERIFY2(std::abs(last-(2999*20000LL+30000))<1000,qPrintable(QString::number(last)));
         }
-        // Thirty minutes from a microphone running 100 ppm slow: each time the
-        // drift outgrows the 20 ms tolerance it is walked back by single frames.
-        AudioTimeline timeline(48000);
-        timeline.lock();
-        qint64 origin=0, written=0, slips=0;
-        bool following=false;
-        for(int i=0;i<90000;++i) {
-            const double trueTime=1000000+i*960*period*1.0001;
-            const auto placed=timeline.place(qRound64(trueTime)+jitter(),960);
-            if(i==0) origin=placed.capturedAt;
-            QVERIFY(!placed.resynced);
-            QVERIFY(std::abs(placed.capturedAt-(origin+written*period))<1); // Rounding only.
-            QVERIFY(std::abs(placed.capturedAt-trueTime)<22000);
-            QVERIFY(placed.slip>=0);
-            if(following && !placed.slip) QVERIFY(std::abs(placed.capturedAt-trueTime)<2000); // All the way back.
-            following=placed.slip;
-            slips+=placed.slip; written+=960+placed.slip;
+        // Thirty minutes from a microphone running 100 ppm slow, then from one
+        // running 100 ppm fast: each time the drift outgrows the 20 ms tolerance
+        // it is walked back by single frames, repeated for the slow microphone
+        // and dropped for the fast one.
+        for(const int direction:{1,-1}) {
+            AudioTimeline timeline(48000);
+            timeline.lock();
+            qint64 origin=0, written=0, slips=0;
+            bool following=false;
+            for(int i=0;i<90000;++i) {
+                const double trueTime=1000000+i*960*period*(1+direction*0.0001);
+                const auto placed=timeline.place(qRound64(trueTime)+jitter(),960);
+                if(i==0) origin=placed.capturedAt;
+                QVERIFY(!placed.resynced);
+                QVERIFY(std::abs(placed.capturedAt-(origin+written*period))<1); // Rounding only.
+                QVERIFY(std::abs(placed.capturedAt-trueTime)<22000);
+                QVERIFY(placed.slip*direction>=0);
+                if(following && !placed.slip) QVERIFY(std::abs(placed.capturedAt-trueTime)<2000); // All the way back.
+                following=placed.slip;
+                slips+=placed.slip*direction; written+=960+placed.slip;
+            }
+            // 180 ms of drift, less whatever has accumulated since the last walk back.
+            QVERIFY2(slips>8640-960-150 && slips<=8640,qPrintable(QString::number(slips*direction)));
         }
-        // 180 ms of drift, less whatever has accumulated since the last walk back.
-        QVERIFY2(slips>8640-960-150 && slips<=8640,qPrintable(QString::number(slips)));
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;
