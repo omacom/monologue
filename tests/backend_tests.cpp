@@ -33,9 +33,11 @@ public:
 // A camera frame as Qt's V4L2 backend delivers MJPEG: one plane of JPEG bytes.
 class JpegBuffer : public QAbstractVideoBuffer {
 public:
-    JpegBuffer(QByteArray jpeg, QSize size) : m_jpeg(std::move(jpeg)), m_format(size, QVideoFrameFormat::Format_Jpeg) {}
+    JpegBuffer(QByteArray jpeg, QSize size, unsigned long delay = 0)
+        : m_jpeg(std::move(jpeg)), m_format(size, QVideoFrameFormat::Format_Jpeg), m_delay(delay) {}
     QVideoFrameFormat format() const override { return m_format; }
     MapData map(QVideoFrame::MapMode) override {
+        if(m_delay) { const auto delay=m_delay; m_delay=0; QThread::msleep(delay); }
         MapData result; result.planeCount=1;
         result.data[0]=reinterpret_cast<uchar*>(m_jpeg.data());
         result.bytesPerLine[0]=result.dataSize[0]=int(m_jpeg.size());
@@ -44,6 +46,7 @@ public:
 private:
     QByteArray m_jpeg;
     QVideoFrameFormat m_format;
+    unsigned long m_delay;
 };
 
 class Tests : public QObject {
@@ -319,6 +322,36 @@ private slots:
             QVERIFY(media::peak(bytes.mid(16000*2,4800*2),a)>.1);
             QVERIFY(QFile::copy(directory.filePath("take.mp4"),fixture.filePath("fixture.mp4")));
         }
+    }
+    void encoderStartup_data() {
+        QTest::addColumn<int>("delayedFrame");
+        QTest::newRow("startup")<<0;
+        QTest::newRow("already-recording")<<60;
+    }
+    void encoderStartup() {
+        QFETCH(int,delayedFrame);
+        QTemporaryDir directory;
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QAudioFormat audio; audio.setSampleRate(48000); audio.setChannelCount(1); audio.setSampleFormat(QAudioFormat::Int16);
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::red);
+        QByteArray jpeg; QBuffer buffer(&jpeg); buffer.open(QIODevice::WriteOnly); QVERIFY(image.save(&buffer,"JPEG"));
+        QVideoFrameFormat format(image.size(),QVideoFrameFormat::Format_Jpeg);
+        QVERIFY(writer.start(directory.filePath("take.mp4"),format,30,audio,0));
+        // Delay real frame mapping on Qt's encoder thread, without replacing the encoder.
+        // Startup must retain the whole take, but a later stall must still trip backpressure.
+        for(int i=0;i<90 && errors.isEmpty();++i) {
+            writer.video(QVideoFrame(std::make_unique<JpegBuffer>(jpeg,image.size(),i==delayedFrame?1000:0)),i*1000000LL/30);
+            writer.audio(QByteArray(1600*2,0),i*1000000LL/30);
+            QTest::qWait(35);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(ended.count()>0,15000);
+        if(delayedFrame) { QVERIFY(!errors.isEmpty()); return; }
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        auto p=media::probe(directory.filePath("take.mp4")); QVERIFY2(p.ok,qPrintable(p.error));
+        QVERIFY(p.audio); QVERIFY(std::abs(p.duration-3)<.1);
+        QProcess frames; frames.start("ffprobe",{"-v","error","-select_streams","v","-show_entries","stream=nb_frames","-of","csv=p=0",directory.filePath("take.mp4")});
+        QVERIFY(frames.waitForFinished()); QCOMPARE(frames.exitCode(),0);
+        QCOMPARE(frames.readAllStandardOutput().trimmed().toInt(),90);
     }
     void recoveryAndSave() {
         const auto directory=leaveTake("00000000-0000-0000-0000-000000000001",fixture.filePath("fixture.mp4"));
