@@ -336,10 +336,12 @@ void Writer::audio(QByteArray data, qint64 capturedAt) {
         // Qt counts audio samples rather than honoring PTS. Materialize capture
         // gaps as silence and trim overlaps, keeping the original event times.
         const qint64 desiredFrame = qRound64(position * m_audioFormat.sampleRate() / 1000000.0);
-        if (desiredFrame < m_audioFramesWritten) {
+        // Capture times are whole microseconds, so a contiguous buffer can round
+        // one frame to either side of the running count. That is neither.
+        if (desiredFrame < m_audioFramesWritten - 1) {
             const auto overlap = (m_audioFramesWritten - desiredFrame) * frameBytes;
             part.remove(0, std::min(qsizetype(part.size()), qsizetype(overlap)));
-        } else padAudioTo(position);
+        } else if (desiredFrame > m_audioFramesWritten + 1) padAudioTo(position);
         if (!part.isEmpty()) appendAudio(part);
     }
 }
