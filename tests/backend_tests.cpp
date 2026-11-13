@@ -578,6 +578,14 @@ private slots:
         const double period=1000000.0/48000;
         QRandomGenerator random(7);
         const auto jitter=[&random] { return qint64(random.bounded(601))-300; };
+        // Before the take the origin is a plain mean of the readings, the first
+        // one included: after 0, +3 ms and +3 ms it sits at their mean.
+        {
+            AudioTimeline timeline(48000);
+            QCOMPARE(timeline.place(0,960).capturedAt,0LL);
+            QCOMPARE(timeline.place(20000+3000,960).capturedAt,20000LL+1500);
+            QCOMPARE(timeline.place(40000+3000,960).capturedAt,40000LL+2000);
+        }
         // Before the take the timeline settles on the measurements, even when
         // the first reading is 15 ms off. During it, jitter and a few
         // milliseconds of wander move nothing: times are contiguous by count.

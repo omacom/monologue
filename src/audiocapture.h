@@ -35,7 +35,7 @@ public:
             placed.resynced = m_started;
             m_started = true;
             m_origin = double(measured) - m_frames * period;
-            m_buffers = 0; m_error = 0; m_far = 0; m_following = false;
+            m_buffers = 1; m_error = 0; m_far = 0; m_following = false;
         } else if (m_far) {
             // Not confirmed yet: place it by count and wait for the next reading.
         } else if (!m_locked) {
