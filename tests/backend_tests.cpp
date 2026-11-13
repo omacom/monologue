@@ -13,12 +13,14 @@
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QSettings>
+#include <QRandomGenerator>
 #include <QAbstractVideoBuffer>
 #include <cmath>
 #include <sys/stat.h>
 #include "mediautils.h"
 #include "theme.h"
 #include "writer.h"
+#include "audiocapture.h"
 #include "backend.h"
 #include "translator.h"
 
@@ -571,6 +573,82 @@ private slots:
         QProcess probe; probe.start("ffprobe",{"-v","error","-select_streams","v:0","-show_entries","stream=pix_fmt,color_space","-of","csv=p=0",path});
         QVERIFY(probe.waitForFinished());
         QCOMPARE(QString::fromUtf8(probe.readAllStandardOutput()).trimmed(),QString("yuv420p,bt709"));
+    }
+    void microphoneTimelineCountsSamplesDuringATake() {
+        const double period=1000000.0/48000;
+        QRandomGenerator random(7);
+        const auto jitter=[&random] { return qint64(random.bounded(601))-300; };
+        // Before the take the origin is a plain mean of the readings, the first
+        // one included: after 0, +3 ms and +3 ms it sits at their mean.
+        {
+            AudioTimeline timeline(48000);
+            QCOMPARE(timeline.place(0,960).capturedAt,0LL);
+            QCOMPARE(timeline.place(20000+3000,960).capturedAt,20000LL+1500);
+            QCOMPARE(timeline.place(40000+3000,960).capturedAt,40000LL+2000);
+        }
+        // Before the take the timeline settles on the measurements, even when
+        // the first reading is 15 ms off. During it, jitter and a few
+        // milliseconds of wander move nothing: times are contiguous by count.
+        {
+            AudioTimeline timeline(48000);
+            timeline.place(-15000,960);
+            qint64 last=0;
+            for(int i=1;i<500;++i) last=timeline.place(i*20000LL+jitter(),960).capturedAt;
+            QVERIFY(std::abs(last-499*20000LL)<1000);
+            timeline.lock();
+            qint64 first=0;
+            for(int i=0;i<3000;++i) {
+                const qint64 wander=qRound64(4000*std::sin(i/500.0));
+                const auto placed=timeline.place((500+i)*20000LL+wander+jitter(),960);
+                if(i==0) first=placed.capturedAt;
+                QCOMPARE(placed.slip,0); QVERIFY(!placed.resynced);
+                QCOMPARE(placed.capturedAt,first+i*20000LL);
+            }
+            // One far reading is noise and moves nothing. Three in a row are a
+            // real gap, and restart the timeline at the measurement.
+            QCOMPARE(timeline.place(3500*20000LL+70000,960).capturedAt,first+3000*20000LL);
+            QCOMPARE(timeline.place(3501*20000LL,960).capturedAt,first+3001*20000LL);
+            for(int i=3502;i<3504;++i) QVERIFY(!timeline.place(i*20000LL+300000,960).resynced);
+            const auto gap=timeline.place(3504*20000LL+300000,960);
+            QVERIFY(gap.resynced); QCOMPARE(gap.capturedAt,3504*20000LL+300000);
+        }
+        // Thirty milliseconds of lost samples, too few for a restart, are walked
+        // back by single frames instead of being left as an offset.
+        {
+            AudioTimeline timeline(48000);
+            timeline.lock();
+            qint64 last=0;
+            for(int i=0;i<3000;++i) {
+                const auto placed=timeline.place(i*20000LL+(i<50?0:30000)+jitter(),960);
+                QVERIFY(!placed.resynced); QVERIFY(placed.slip>=0);
+                last=placed.capturedAt;
+            }
+            QVERIFY2(std::abs(last-(2999*20000LL+30000))<1000,qPrintable(QString::number(last)));
+        }
+        // Thirty minutes from a microphone running 100 ppm slow, then from one
+        // running 100 ppm fast: each time the drift outgrows the 20 ms tolerance
+        // it is walked back by single frames, repeated for the slow microphone
+        // and dropped for the fast one.
+        for(const int direction:{1,-1}) {
+            AudioTimeline timeline(48000);
+            timeline.lock();
+            qint64 origin=0, written=0, slips=0;
+            bool following=false;
+            for(int i=0;i<90000;++i) {
+                const double trueTime=1000000+i*960*period*(1+direction*0.0001);
+                const auto placed=timeline.place(qRound64(trueTime)+jitter(),960);
+                if(i==0) origin=placed.capturedAt;
+                QVERIFY(!placed.resynced);
+                QVERIFY(std::abs(placed.capturedAt-(origin+written*period))<1); // Rounding only.
+                QVERIFY(std::abs(placed.capturedAt-trueTime)<22000);
+                QVERIFY(placed.slip*direction>=0);
+                if(following && !placed.slip) QVERIFY(std::abs(placed.capturedAt-trueTime)<2000); // All the way back.
+                following=placed.slip;
+                slips+=placed.slip*direction; written+=960+placed.slip;
+            }
+            // 180 ms of drift, less whatever has accumulated since the last walk back.
+            QVERIFY2(slips>8640-960-150 && slips<=8640,qPrintable(QString::number(slips*direction)));
+        }
     }
     void delayedCaptureStaysInSync() {
         QTemporaryDir directory;

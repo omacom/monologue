@@ -285,6 +285,7 @@ void Backend::startTake() {
     m_clipPath=directory+"/"+m_clipFileName;
     m_interruption.clear(); m_duration=0;
     readAudio();
+    if(m_audio) m_audio->lockTimeline();
     m_writer=new Writer(this);
     connect(m_writer,&Writer::finished,this,&Backend::writerFinished,Qt::QueuedConnection);
     connect(m_writer,&Writer::failed,this,[this](const QString &error) { m_interruption=error; m_message=error; m_state="finalizing"; emit changed(); });
