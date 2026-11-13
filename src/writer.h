@@ -7,6 +7,7 @@
 #include <QVideoFrame>
 #include <QQueue>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <optional>
 
 // Maps a monotonic capture clock onto a take with the paused intervals removed.
@@ -48,6 +49,7 @@ signals:
     void finished();
     void failed(const QString &message);
 private:
+    bool startingEncoder() const;
     void drain();
     void fail(const QString &message);
     void appendAudio(const QByteArray &data);
@@ -63,6 +65,7 @@ private:
     QVideoFrame m_tailFrame;
     QQueue<QAudioBuffer> m_buffers;
     QTimer m_flushTimeout;
+    QElapsedTimer m_encoderStartup;
     TakeClock m_clock;
     qint64 m_lastVideo = -1, m_lastIndex = -1;
     qint64 m_frameDuration = 33333;
