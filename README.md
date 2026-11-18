@@ -82,7 +82,7 @@ The recording engine forwards native camera frames and one shared microphone PCM
 
 A synchronization regression test encodes and decodes matching flashes and audio clicks with delayed delivery, including events just before Pause and Finish. It checks event alignment within 10 ms, rather than only comparing stream durations.
 
-Run `./bin/test-camera` explicitly for a short real camera/microphone recording with a pause and resume. It uses separate `monologue-camera-check` settings and storage, and retains its output for inspection. It is never run by `bin/test`.
+Run `./bin/test-camera` explicitly for a short real camera/microphone recording with a pause and resume. It fails when the clip holds fewer than 90% of the frames the camera delivered while recording. It uses separate `monologue-camera-check` settings and storage, and retains its output for inspection. It is never run by `bin/test`.
 
 A real-camera check is still needed for each device/backend combination, particularly maximum-resolution throughput and synchronization over long takes. Short 1920 × 1080 and 3840 × 2160 hardware checks passed on this machine; they do not establish physical lip sync or sustained throughput.
 
