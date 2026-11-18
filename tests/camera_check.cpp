@@ -37,9 +37,9 @@ int main(int argc,char**argv) {
             QTimer::singleShot(5200,&backend,&Backend::finish);
         }
         if(backend.state()=="finished") {
-            // The take is written at up to 30 fps, so a faster camera is not expected in full.
+            // The take holds at most its own frame rate, so a faster camera is not expected in full.
             const int recorded=clipFrames(backend.clip().toLocalFile());
-            const int expected=std::min(delivered,qRound(backend.duration()*30));
+            const int expected=std::min(delivered,qRound(backend.duration()*backend.fps()));
             QTextStream(stdout)<<"Clip: "<<backend.clip().toLocalFile()<<Qt::endl
                                <<"Duration: "<<backend.duration()<<Qt::endl
                                <<"Frames: "<<recorded<<" recorded, "<<delivered<<" delivered by the camera"<<Qt::endl;

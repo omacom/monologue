@@ -65,6 +65,8 @@ public:
     bool takeActive() const { return m_writer != nullptr; }
     bool dialogOpen() const { return m_dialogOpen; }
     double duration() const { return m_duration; }
+    // The rate takes are written at, which follows the selected camera mode.
+    double fps() const { return m_fps; }
     double level() const { return m_level; }
     double peakLevel() const { return m_peak; }
     bool clipping() const { return now() < m_clipUntil; }
