@@ -69,5 +69,10 @@ private:
     double m_fps = 30;
     qint64 m_queuedAudioUs = 0;
     qint64 m_audioFramesWritten = 0;
+    // The take interval the last audio went into, how many frames the capture
+    // times say the track is behind them on average, and the fraction of a
+    // frame still owed to resampling.
+    std::optional<qint64> m_audioInterval;
+    double m_audioLag = 0, m_audioStretch = 0;
     bool m_stopping = false, m_failed = false, m_draining = false;
 };

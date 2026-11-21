@@ -4,9 +4,12 @@
 #include "mediautils.h"
 #include <QAbstractVideoBuffer>
 #include <QImage>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <cstring>
+#include <type_traits>
 #include <turbojpeg.h>
 
 namespace {
@@ -319,10 +322,58 @@ void Writer::videoAt(QVideoFrame frame, qint64 position, bool fromCamera) {
     m_frames.enqueue(frame);
     drain();
 }
+namespace {
+// A buffer's capture time is the audio server's latency estimate, which jitters
+// by several milliseconds from one buffer to the next, while the microphone's
+// clock drifts from ours by a fraction of a millisecond per second. The track
+// follows the capture times on average and resamples slightly to keep up.
+constexpr double kAudioAveragingUs = 1000000;
+constexpr double kAudioCatchUpUs = 2000000;
+// 0.5% at most: under 9 cents of pitch, which nobody hears in speech.
+constexpr double kAudioMaxStretch = 0.005;
+// Beyond this, capture really lost or repeated samples, as FFmpeg's aresample assumes.
+constexpr qint64 kAudioResyncUs = 100000;
+constexpr qsizetype kAudioMinStretchFrames = 64;
+
+// Resamples interleaved PCM to frames frames with Catmull-Rom interpolation.
+// The first and last frames stay put, so consecutive buffers still meet without a step.
+template<typename T> QByteArray stretchedAs(const QByteArray &data, int channels, qsizetype frames) {
+    const auto *in = reinterpret_cast<const T*>(data.constData());
+    const qsizetype count = data.size() / qsizetype(sizeof(T)) / channels;
+    if (count < 2 || frames < 2) return data;
+    QByteArray result(frames * channels * qsizetype(sizeof(T)), Qt::Uninitialized);
+    auto *out = reinterpret_cast<T*>(result.data());
+    const auto at = [&](qsizetype frame, int channel) {
+        return double(in[std::clamp(frame, qsizetype(0), count - 1) * channels + channel]);
+    };
+    const double step = double(count - 1) / double(frames - 1);
+    for (qsizetype j = 0; j < frames; ++j) {
+        const qsizetype i = std::min(qsizetype(j * step), count - 2);
+        const double t = j * step - double(i);
+        for (int c = 0; c < channels; ++c) {
+            const double p0 = at(i - 1, c), p1 = at(i, c), p2 = at(i + 1, c), p3 = at(i + 2, c);
+            const double v = p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+            if constexpr (std::is_floating_point_v<T>) out[j * channels + c] = T(v);
+            else out[j * channels + c] = T(std::clamp(std::round(v), double(std::numeric_limits<T>::min()), double(std::numeric_limits<T>::max())));
+        }
+    }
+    return result;
+}
+QByteArray stretched(const QByteArray &data, const QAudioFormat &format, qsizetype frames) {
+    switch (format.sampleFormat()) {
+    case QAudioFormat::UInt8: return stretchedAs<quint8>(data, format.channelCount(), frames);
+    case QAudioFormat::Int16: return stretchedAs<qint16>(data, format.channelCount(), frames);
+    case QAudioFormat::Int32: return stretchedAs<qint32>(data, format.channelCount(), frames);
+    case QAudioFormat::Float: return stretchedAs<float>(data, format.channelCount(), frames);
+    default: return data;
+    }
+}
+}
 void Writer::audio(QByteArray data, qint64 capturedAt) {
     if (m_stopping || m_failed || !m_audio || data.isEmpty()) return;
     const qint64 end = capturedAt + m_audioFormat.durationForBytes(data.size());
     const int frameBytes = m_audioFormat.bytesPerFrame();
+    const int rate = m_audioFormat.sampleRate();
     // Select by capture time, including closed intervals. A late buffer may
     // straddle Pause, Resume, or Finish; only the recorded sample ranges survive.
     for (const auto &span : m_clock.spans(capturedAt, end)) {
@@ -333,13 +384,27 @@ void Writer::audio(QByteArray data, qint64 capturedAt) {
         const qint64 last = sampleAtOrAfter(span.end - capturedAt);
         QByteArray part = data.mid(first * frameBytes, (last - first) * frameBytes);
         const auto position = span.position + m_audioFormat.durationForFrames(first) - (span.begin - capturedAt);
-        // Qt counts audio samples rather than honoring PTS. Materialize capture
-        // gaps as silence and trim overlaps, keeping the original event times.
-        const qint64 desiredFrame = qRound64(position * m_audioFormat.sampleRate() / 1000000.0);
-        if (desiredFrame < m_audioFramesWritten) {
-            const auto overlap = (m_audioFramesWritten - desiredFrame) * frameBytes;
-            part.remove(0, std::min(qsizetype(part.size()), qsizetype(overlap)));
-        } else padAudioTo(position);
+        const qint64 lag = qRound64(position * rate / 1000000.0) - m_audioFramesWritten;
+        const qint64 interval = span.position - span.begin;
+        const qsizetype frames = part.size() / frameBytes;
+        if (interval != m_audioInterval || std::abs(lag) * 1000000 > kAudioResyncUs * rate) {
+            // An interval starts, or capture lost or repeated samples. Qt counts
+            // audio samples rather than honoring PTS, so pad the gap with silence
+            // or trim the overlap, keeping the original event times.
+            m_audioInterval = interval; m_audioLag = 0; m_audioStretch = 0;
+            if (lag < 0) part.remove(0, std::min(qsizetype(part.size()), qsizetype(-lag * frameBytes)));
+            else padAudioTo(position);
+        } else if (frames >= kAudioMinStretchFrames) {
+            // Within an interval the samples run on unbroken. Padding or trimming
+            // each buffer to its own jittery capture time would break the
+            // waveform at every buffer: a click 50 times a second.
+            m_audioLag += (double(lag) - m_audioLag) * std::min(1.0, m_audioFormat.durationForFrames(frames) / kAudioAveragingUs);
+            m_audioStretch += frames * std::clamp(m_audioLag / rate * 1000000.0 / kAudioCatchUpUs, -kAudioMaxStretch, kAudioMaxStretch);
+            if (const auto extra = qint64(m_audioStretch)) {
+                m_audioStretch -= double(extra);
+                part = stretched(part, m_audioFormat, frames + extra);
+            }
+        }
         if (!part.isEmpty()) appendAudio(part);
     }
 }
