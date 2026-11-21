@@ -9,7 +9,6 @@
 #include <limits>
 #include <memory>
 #include <cstring>
-#include <type_traits>
 #include <turbojpeg.h>
 
 namespace {
@@ -334,40 +333,6 @@ constexpr double kAudioMaxStretch = 0.005;
 // Beyond this, capture really lost or repeated samples, as FFmpeg's aresample assumes.
 constexpr qint64 kAudioResyncUs = 100000;
 constexpr qsizetype kAudioMinStretchFrames = 64;
-
-// Resamples interleaved PCM to frames frames with Catmull-Rom interpolation.
-// The first and last frames stay put, so consecutive buffers still meet without a step.
-template<typename T> QByteArray stretchedAs(const QByteArray &data, int channels, qsizetype frames) {
-    const auto *in = reinterpret_cast<const T*>(data.constData());
-    const qsizetype count = data.size() / qsizetype(sizeof(T)) / channels;
-    if (count < 2 || frames < 2) return data;
-    QByteArray result(frames * channels * qsizetype(sizeof(T)), Qt::Uninitialized);
-    auto *out = reinterpret_cast<T*>(result.data());
-    const auto at = [&](qsizetype frame, int channel) {
-        return double(in[std::clamp(frame, qsizetype(0), count - 1) * channels + channel]);
-    };
-    const double step = double(count - 1) / double(frames - 1);
-    for (qsizetype j = 0; j < frames; ++j) {
-        const qsizetype i = std::min(qsizetype(j * step), count - 2);
-        const double t = j * step - double(i);
-        for (int c = 0; c < channels; ++c) {
-            const double p0 = at(i - 1, c), p1 = at(i, c), p2 = at(i + 1, c), p3 = at(i + 2, c);
-            const double v = p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
-            if constexpr (std::is_floating_point_v<T>) out[j * channels + c] = T(v);
-            else out[j * channels + c] = T(std::clamp(std::round(v), double(std::numeric_limits<T>::min()), double(std::numeric_limits<T>::max())));
-        }
-    }
-    return result;
-}
-QByteArray stretched(const QByteArray &data, const QAudioFormat &format, qsizetype frames) {
-    switch (format.sampleFormat()) {
-    case QAudioFormat::UInt8: return stretchedAs<quint8>(data, format.channelCount(), frames);
-    case QAudioFormat::Int16: return stretchedAs<qint16>(data, format.channelCount(), frames);
-    case QAudioFormat::Int32: return stretchedAs<qint32>(data, format.channelCount(), frames);
-    case QAudioFormat::Float: return stretchedAs<float>(data, format.channelCount(), frames);
-    default: return data;
-    }
-}
 }
 void Writer::audio(QByteArray data, qint64 capturedAt) {
     if (m_stopping || m_failed || !m_audio || data.isEmpty()) return;
@@ -402,7 +367,7 @@ void Writer::audio(QByteArray data, qint64 capturedAt) {
             m_audioStretch += frames * std::clamp(m_audioLag / rate * 1000000.0 / kAudioCatchUpUs, -kAudioMaxStretch, kAudioMaxStretch);
             if (const auto extra = qint64(m_audioStretch)) {
                 m_audioStretch -= double(extra);
-                part = stretched(part, m_audioFormat, frames + extra);
+                part = media::stretched(part, m_audioFormat, frames + extra);
             }
         }
         if (!part.isEmpty()) appendAudio(part);

@@ -28,6 +28,9 @@ double targetFps(double minimum, double maximum);
 // The source to use: the remembered one while it's connected, else the default, else the first connected.
 QString chooseSource(const QStringList &connected, const QString &preferred, const QString &remembered);
 double peak(const QByteArray &data, const QAudioFormat &format);
+// Resamples interleaved PCM to frames frames with Catmull-Rom interpolation.
+// The first and last frames stay put, so consecutive buffers still meet without a step.
+QByteArray stretched(const QByteArray &data, const QAudioFormat &format, qsizetype frames);
 QString copyAtomically(const QString &source, const QString &destination);
 // Renames a finished partial file over destination, with the permissions a new file there would get.
 QString moveIntoPlace(const QString &partial, const QString &destination);
