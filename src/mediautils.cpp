@@ -1,5 +1,6 @@
 #include "mediautils.h"
 #include <QCoreApplication>
+#include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -192,16 +193,25 @@ QString media::moveIntoPlace(const QString &partial, const QString &destination)
 namespace {
 // Omarchy's screen recordings come out at -14 LUFS with peaks under -1.5 dBFS.
 constexpr double kTakeLoudness = -14, kTakePeak = -1.5;
-// The integrated loudness of a take's audio played as stereo, or NaN without audio.
-double stereoLoudness(const QString &path) {
+struct Loudness { double integrated = NAN; double seconds = 0; };
+// The integrated loudness of a take's audio played as stereo, NaN without audio, and the take's length.
+Loudness stereoLoudness(const QString &path) {
     QProcess process;
     process.start("ffmpeg", {"-nostdin", "-v", "info", "-nostats", "-i", path, "-map", "0:a:0",
                             "-af", "aformat=channel_layouts=stereo,ebur128=framelog=verbose", "-f", "null", "-"});
-    if (!process.waitForFinished(120000)) { process.kill(); process.waitForFinished(); return NAN; }
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return NAN;
-    const auto summary = QString::fromUtf8(process.readAllStandardError()).section("Summary:", -1);
-    const auto match = QRegularExpression(R"(I:\s+(-?[\d.]+) LUFS)").match(summary);
-    return match.hasMatch() ? match.captured(1).toDouble() : NAN;
+    if (!process.waitForFinished(120000)) {
+        process.kill(); process.waitForFinished();
+        qWarning("Measuring the take's loudness timed out; keeping its recorded level.");
+        return {};
+    }
+    const auto report = QString::fromUtf8(process.readAllStandardError());
+    Loudness result;
+    if (const auto length = QRegularExpression(R"(Duration: (\d+):(\d+):([\d.]+))").match(report); length.hasMatch())
+        result.seconds = length.captured(1).toInt() * 3600 + length.captured(2).toInt() * 60 + length.captured(3).toDouble();
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return result;
+    const auto match = QRegularExpression(R"(I:\s+(-?[\d.]+) LUFS)").match(report.section("Summary:", -1));
+    if (match.hasMatch()) result.integrated = match.captured(1).toDouble();
+    return result;
 }
 }
 QString media::normalizeMp4(const QString &path, double fps) {
@@ -210,27 +220,40 @@ QString media::normalizeMp4(const QString &path, double fps) {
     // Remux (no re-encoding), preserving PTS/DTS but assigning one nominal frame
     // duration. Gaps between presentation timestamps still hold the last image.
     const auto temporary=path+".finalizing.mp4";
-    QStringList args{"-nostdin", "-v", "error", "-y", "-i", path,
-                     "-map", "0", "-c", "copy", "-bsf:v",
-                     "setts=pts=PTS:dts=DTS:duration=1/("+QString::number(fps,'g',12)+"*TB)"};
+    const auto loudness = stereoLoudness(path);
+    // Encoding the audio takes longer the longer the take: allow for at least ten
+    // times real time on a busy machine, where an idle one manages sixty.
+    const int deadline = 120000 + int(loudness.seconds * 100);
+    const auto finalize = [&](const QStringList &audio) -> QString {
+        QProcess process;
+        process.start("ffmpeg", QStringList{"-nostdin", "-v", "error", "-y", "-i", path,
+                                            "-map", "0", "-c", "copy", "-bsf:v",
+                                            "setts=pts=PTS:dts=DTS:duration=1/("+QString::number(fps,'g',12)+"*TB)"}
+                                + audio + QStringList{"-movflags", "+faststart", temporary});
+        if(!process.waitForFinished(deadline)) {
+            process.kill(); process.waitForFinished();
+            return QCoreApplication::translate("media", "Finalizing the recording timed out.");
+        }
+        if(process.exitStatus()!=QProcess::NormalExit || process.exitCode()!=0)
+            return QCoreApplication::translate("media", "Could not finalize the MP4: %1").arg(QString::fromUtf8(process.readAllStandardError()).left(500));
+        return {};
+    };
     // Bring the audio to the loudness of Omarchy's screen recordings, however
     // low the microphone's gain: one gain for the whole take, and a limiter,
     // compensated for its lookahead, for the few peaks that would then clip.
     // Stereo like them, since players disagree on how loud mono plays. A take
-    // too quiet to measure keeps its level.
-    if (const double loudness = stereoLoudness(path); loudness > -70)
-        args << "-af" << QString("aformat=channel_layouts=stereo,volume=%1dB,alimiter=limit=%2:level=false:latency=true")
-                             .arg(kTakeLoudness - loudness, 0, 'f', 2).arg(std::pow(10, kTakePeak / 20), 0, 'f', 4)
-             << "-c:a" << "aac" << "-b:a" << "192k";
-    args << "-movflags" << "+faststart" << temporary;
-    QProcess process;
-    process.start("ffmpeg", args);
-    if(!process.waitForFinished(120000)) {
-        process.kill(); process.waitForFinished();
-        return QCoreApplication::translate("media", "Finalizing the recording timed out.");
+    // too quiet to measure keeps its level, and so does one whose audio could
+    // not be adjusted: a quiet take is better than none.
+    bool adjusted = false;
+    if (loudness.integrated > -70) {
+        const auto error = finalize({"-af", QString("aformat=channel_layouts=stereo,volume=%1dB,alimiter=limit=%2:level=false:latency=true")
+                                                .arg(kTakeLoudness - loudness.integrated, 0, 'f', 2).arg(std::pow(10, kTakePeak / 20), 0, 'f', 4),
+                                     "-c:a", "aac", "-b:a", "192k"});
+        adjusted = error.isEmpty();
+        if (!adjusted) qWarning().noquote() << "Keeping the take at its recorded level:" << error;
     }
-    if(process.exitStatus()!=QProcess::NormalExit || process.exitCode()!=0)
-        return QCoreApplication::translate("media", "Could not finalize the MP4: %1").arg(QString::fromUtf8(process.readAllStandardError()).left(500));
+    if (!adjusted)
+        if (const auto error = finalize({}); !error.isEmpty()) return error;
     if(std::rename(QFile::encodeName(temporary).constData(),QFile::encodeName(path).constData())!=0)
         return QCoreApplication::translate("media", "Could not replace the finalized clip.");
     return {};

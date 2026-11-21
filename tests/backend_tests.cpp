@@ -322,7 +322,8 @@ private slots:
     }
     void quietTakeComesOutAtScreenRecordingLoudness() {
         // A microphone with little gain records far below Omarchy's screen
-        // recordings; finishing the take brings it to their -14 LUFS.
+        // recordings; finishing the take brings it to their -14 LUFS. A burst
+        // every half second would then peak over full scale but for the limiter.
         QTemporaryDir directory; const auto path=directory.filePath("quiet.mp4");
         QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(1); format.setSampleFormat(QAudioFormat::Int16);
         Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
@@ -331,7 +332,10 @@ private slots:
         for(int buffer=0,frame=0;buffer<200;++buffer) {
             for(;frame*1000000LL/30<=buffer*20000LL;++frame) writer.video(QVideoFrame(black),frame*1000000LL/30);
             QByteArray pcm(960*2,Qt::Uninitialized); auto *samples=reinterpret_cast<qint16*>(pcm.data());
-            for(int i=0;i<960;++i) samples[i]=qint16(300*std::sin((buffer*960+i)*2*3.141592653589793*440/48000));
+            for(int i=0;i<960;++i) {
+                const qint64 at=buffer*960LL+i;
+                samples[i]=qint16((at%24000<96 ? 1800 : 300)*std::sin(at*2*3.141592653589793*440/48000));
+            }
             writer.audio(pcm,buffer*20000LL);
             QTest::qWait(10);
         }
