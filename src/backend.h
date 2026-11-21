@@ -4,6 +4,7 @@
 #include <QMediaCaptureSession>
 #include <QCamera>
 #include "audiocapture.h"
+#include "pipewirecamera.h"
 #include <QVideoSink>
 #include <QElapsedTimer>
 #include <QSettings>
@@ -148,6 +149,11 @@ private:
     QVideoSink m_sink;
     QPointer<QVideoSink> m_preview;
     QCamera *m_camera = nullptr;
+    // The selected camera when only PipeWire can deliver it; m_camera is null then.
+    PipeWireCamera *m_pipewireCamera = nullptr;
+    // The selected camera's resolution, which every frame must have, and its name.
+    QSize m_resolution;
+    QString m_cameraLabel;
     AudioCapture *m_audio = nullptr;
     QAudioFormat m_audioFormat;
     QVideoFrame m_lastFrame;
