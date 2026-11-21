@@ -14,7 +14,10 @@
 #include <QStandardPaths>
 #include <QSettings>
 #include <QAbstractVideoBuffer>
+#include <QRandomGenerator>
+#include <algorithm>
 #include <cmath>
+#include <functional>
 #include <sys/stat.h>
 #include "mediautils.h"
 #include "theme.h"
@@ -54,6 +57,68 @@ class Tests : public QObject {
         const auto directory=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/recordings/"+id;
         if(!QDir().mkpath(directory) || !QFile::copy(clip,directory+"/take.mp4")) return {};
         return directory;
+    }
+    static QAudioFormat microphone(QAudioFormat::SampleFormat sampleFormat=QAudioFormat::Int16, int channels=1) {
+        QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(channels); format.setSampleFormat(sampleFormat);
+        return format;
+    }
+    // Sample index of interleaved PCM as a value from -1 to 1, the way format stores it.
+    static void store(QByteArray &pcm, const QAudioFormat &format, qsizetype index, double value) {
+        char *at=pcm.data()+index*format.bytesPerSample();
+        switch(format.sampleFormat()) {
+        case QAudioFormat::UInt8: *at=char(std::clamp(std::lround(value*128)+128,0L,255L)); break;
+        case QAudioFormat::Int16: { const auto v=qint16(std::clamp(std::lround(value*32768),-32768L,32767L)); std::memcpy(at,&v,2); break; }
+        case QAudioFormat::Int32: { const auto v=qint32(std::clamp(std::llround(value*2147483648.0),-2147483648LL,2147483647LL)); std::memcpy(at,&v,4); break; }
+        default: { const auto v=float(value); std::memcpy(at,&v,4); }
+        }
+    }
+    static double load(const QByteArray &pcm, const QAudioFormat &format, qsizetype index) {
+        const char *at=pcm.constData()+index*format.bytesPerSample();
+        switch(format.sampleFormat()) {
+        case QAudioFormat::UInt8: return (quint8(*at)-128)/128.0;
+        case QAudioFormat::Int16: { qint16 v; std::memcpy(&v,at,2); return v/32768.0; }
+        case QAudioFormat::Int32: { qint32 v; std::memcpy(&v,at,4); return v/2147483648.0; }
+        default: { float v; std::memcpy(&v,at,4); return v; }
+        }
+    }
+    // Records buffers of 960 frames from a simulated 48 kHz microphone, with
+    // the capture time capturedAt(buffer) and the sample sample(frame) on every
+    // channel, and returns the decoded track as 16-bit mono. Twice real time,
+    // so the encoder keeps up.
+    static QByteArray recordMicrophone(const QString &path, const QAudioFormat &format, int buffers,
+                                       const std::function<qint64(int)> &capturedAt, const std::function<qint16(qint64)> &sample) {
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        if(!writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,format,0)) return {};
+        QImage black(320,240,QImage::Format_RGB32); black.fill(Qt::black);
+        for(int buffer=0,frame=0;buffer<buffers;++buffer) {
+            for(;frame*1000000LL/30<=buffer*20000LL;++frame) writer.video(QVideoFrame(black),frame*1000000LL/30);
+            QByteArray pcm(960*format.bytesPerFrame(),Qt::Uninitialized);
+            for(int i=0;i<960;++i) {
+                const double value=sample(buffer*960LL+i)/32768.0;
+                for(int c=0;c<format.channelCount();++c) store(pcm,format,i*format.channelCount()+c,value);
+            }
+            writer.audio(pcm,capturedAt(buffer));
+            QTest::qWait(10);
+        }
+        writer.finish();
+        if(!QTest::qWaitFor([&] { return !ended.isEmpty(); },15000)) return {};
+        if(!errors.isEmpty()) { qWarning()<<errors.first().first().toString(); return {}; }
+        if(const auto error=media::normalizeMp4(path,30); !error.isEmpty()) { qWarning()<<error; return {}; }
+        QProcess decode; decode.start("ffmpeg",{"-v","error","-i",path,"-vn","-ac","1","-ar","48000","-f","s16le","-"});
+        if(!decode.waitForFinished(30000) || decode.exitCode()!=0) return {};
+        return decode.readAllStandardOutput();
+    }
+    // Where each 10 ms click starts in a decoded track, in seconds.
+    static QList<double> clickTimes(const QByteArray &pcm) {
+        QList<double> clicks; int lastLoud=-48000;
+        for(int i=0;i<pcm.size()/2;++i) {
+            qint16 sample; std::memcpy(&sample,pcm.constData()+i*2,2);
+            if(std::abs(int(sample))>5000) {
+                if(i-lastLoud>2400) clicks.append(i/48000.0);
+                lastLoud=i;
+            }
+        }
+        return clicks;
     }
 private slots:
     void formatSelection() {
@@ -624,21 +689,104 @@ private slots:
         QProcess audio;
         audio.start("ffmpeg",{"-v","error","-i",path,"-vn","-ac","1","-ar","48000","-f","s16le","-"});
         QVERIFY(audio.waitForFinished()); QCOMPARE(audio.exitCode(),0);
-        const auto pcm=audio.readAllStandardOutput();
-        QList<double> clicks; int lastLoud=-48000;
-        for(int i=0;i<pcm.size()/2;++i) {
-            qint16 sample; std::memcpy(&sample,pcm.constData()+i*2,2);
-            if(std::abs(int(sample))>5000) {
-                if(i-lastLoud>2400) clicks.append(i/48000.0);
-                lastLoud=i;
-            }
-        }
+        const auto clicks=clickTimes(audio.readAllStandardOutput());
         QCOMPARE(flashes.size(),4); QCOMPARE(clicks.size(),4);
         for(int i=0;i<4;++i) {
             const double expected=i<2 ? events[i]/1000000.0 : events[i]/1000000.0-1;
             QVERIFY2(std::abs(flashes[i]-expected)<.002,qPrintable(QString("Flash %1 at %2, expected %3").arg(i).arg(flashes[i]).arg(expected)));
             QVERIFY2(std::abs(flashes[i]-clicks[i])<.01,qPrintable(QString("Event %1: video %2, audio %3").arg(i).arg(flashes[i]).arg(clicks[i])));
         }
+    }
+    void stretchingKeepsEverySampleFormatIntact() {
+        // Microphones arrive in the format they prefer, mono or stereo. Channel 0
+        // carries a tone, then a full-scale square wave; channel 1 a constant.
+        for(const auto sampleFormat:{QAudioFormat::UInt8,QAudioFormat::Int16,QAudioFormat::Int32,QAudioFormat::Float})
+        for(const int channels:{1,2})
+        for(const qsizetype frames:{957,963}) {
+            const auto format=microphone(sampleFormat,channels);
+            const auto label=QString("Format %1, %2 channels, to %3 frames").arg(int(sampleFormat)).arg(channels).arg(frames);
+            const qsizetype count=960;
+            QByteArray input(count*format.bytesPerFrame(),Qt::Uninitialized);
+            for(qsizetype i=0;i<count;++i) {
+                store(input,format,i*channels,i<480 ? .5*std::sin(i*2*3.141592653589793*440/48000) : (i/8)%2 ? -1 : 1);
+                if(channels>1) store(input,format,i*channels+1,.25);
+            }
+            const auto output=media::stretched(input,format,frames);
+            QVERIFY2(output.size()==frames*format.bytesPerFrame(),qPrintable(label));
+            QVERIFY2(output.first(format.bytesPerFrame())==input.first(format.bytesPerFrame()),qPrintable(label));
+            QVERIFY2(output.last(format.bytesPerFrame())==input.last(format.bytesPerFrame()),qPrintable(label));
+            const double quantum=sampleFormat==QAudioFormat::UInt8 ? 1/128.0 : sampleFormat==QAudioFormat::Int16 ? 1/32768.0 : 1e-6;
+            for(qsizetype j=0;j<frames;++j) {
+                // Output frame j sits at input position j*step, spread evenly between the fixed ends.
+                const double position=j*double(count-1)/double(frames-1);
+                const auto i=std::min(qsizetype(position),count-2);
+                const double value=load(output,format,j*channels);
+                if(position<470) {
+                    const double expected=.5*std::sin(position*2*3.141592653589793*440/48000);
+                    QVERIFY2(std::abs(value-expected)<2*quantum+1e-4,qPrintable(label+QString(": frame %1 is %2, expected %3").arg(j).arg(value).arg(expected)));
+                } else if(i>480 && load(input,format,i*channels)==load(input,format,(i+1)*channels)) {
+                    // Between two equal full-scale samples, interpolation overshoots:
+                    // integers must saturate there rather than wrap around.
+                    const double extreme=load(input,format,i*channels);
+                    QVERIFY2(sampleFormat==QAudioFormat::Float ? value*extreme>=1 : value==extreme,
+                             qPrintable(label+QString(": frame %1 is %2 between samples of %3").arg(j).arg(value).arg(extreme)));
+                }
+                if(channels>1) QVERIFY2(load(output,format,j*channels+1)==load(input,format,1),qPrintable(label+QString(": channel 1 changed at frame %1").arg(j)));
+            }
+        }
+    }
+    void jitteryCaptureTimesKeepTheWaveformUnbroken_data() {
+        QTest::addColumn<int>("sampleFormat"); QTest::addColumn<int>("channels"); QTest::addColumn<double>("clock");
+        // As PipeWire offers them: capture cards in 16-bit, built-in inputs in
+        // 32-bit, USB microphones in float. A slow microphone clock makes the
+        // track stretch to keep up, a fast one shrink.
+        QTest::newRow("16-bit mono")<<int(QAudioFormat::Int16)<<1<<1.0;
+        QTest::newRow("16-bit stereo, fast microphone")<<int(QAudioFormat::Int16)<<2<<.998;
+        QTest::newRow("32-bit stereo, slow microphone")<<int(QAudioFormat::Int32)<<2<<1.002;
+        QTest::newRow("float mono, slow microphone")<<int(QAudioFormat::Float)<<1<<1.002;
+        QTest::newRow("float mono, fast microphone")<<int(QAudioFormat::Float)<<1<<.998;
+    }
+    void jitteryCaptureTimesKeepTheWaveformUnbroken() {
+        // The audio server's latency estimate moves capture times by a few
+        // milliseconds from buffer to buffer. A steady tone must come out
+        // without a step at any buffer edge.
+        QFETCH(int,sampleFormat); QFETCH(int,channels); QFETCH(double,clock);
+        QTemporaryDir directory;
+        QRandomGenerator jitter(7);
+        QList<qint64> times; for(int buffer=0;buffer<150;++buffer) times.append(qRound64(buffer*20000*clock)+jitter.bounded(-4000,4001));
+        const auto pcm=recordMicrophone(directory.filePath("tone.mp4"),microphone(QAudioFormat::SampleFormat(sampleFormat),channels),150,
+                                        [&](int buffer) { return times[buffer]; },
+                                        [](qint64 frame) { return qint16(8000*std::sin(frame*2*3.141592653589793*440/48000)); });
+        QVERIFY(pcm.size()>2*48000*2);
+        // A 440 Hz tone changes slope by at most 27 per sample. Skip the onset and the cut-off end.
+        double worst=0; qsizetype at=0;
+        const auto *samples=reinterpret_cast<const qint16*>(pcm.constData());
+        for(qsizetype i=4800;i<pcm.size()/2-4800;++i) {
+            const double step=std::abs(samples[i+1]-2.0*samples[i]+samples[i-1]);
+            if(step>worst) { worst=step; at=i; }
+        }
+        QVERIFY2(worst<300,qPrintable(QString("A step of %1 at %2 s").arg(worst).arg(at/48000.0)));
+    }
+    void driftingMicrophoneStaysInSync() {
+        // A microphone clock 0.1% slower than ours, with jittery capture times:
+        // clicks must stay at their capture times instead of creeping early.
+        QTemporaryDir directory;
+        QRandomGenerator jitter(11);
+        const int buffers=450;
+        QList<qint64> times; for(int buffer=0;buffer<buffers;++buffer) times.append(qRound64(buffer*20000*1.001)+jitter.bounded(-4000,4001));
+        const QList<qint64> events{3000000,5000000,7000000,8800000};
+        const auto pcm=recordMicrophone(directory.filePath("drift.mp4"),microphone(),buffers,[&](int buffer) { return times[buffer]; },
+                                        [&](qint64 frame) {
+            const double time=frame*1001000.0/48000;
+            for(const auto event:events)
+                if(time>=event && time<event+10000) return qint16(12000*std::sin(frame*2*3.141592653589793*1000/48000));
+            return qint16(0);
+        });
+        QVERIFY(!pcm.isEmpty());
+        const auto clicks=clickTimes(pcm);
+        QCOMPARE(clicks.size(),events.size());
+        for(int i=0;i<events.size();++i)
+            QVERIFY2(std::abs(clicks[i]-events[i]/1000000.0)<.005,qPrintable(QString("Click %1 at %2 s, captured at %3 s").arg(i).arg(clicks[i]).arg(events[i]/1000000.0)));
     }
 };
 int main(int argc,char**argv) {
