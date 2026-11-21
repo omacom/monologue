@@ -6,6 +6,7 @@
 #include <QProcess>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -188,17 +189,42 @@ QString media::moveIntoPlace(const QString &partial, const QString &destination)
         return QCoreApplication::translate("media", "Could not move the finished MP4 into place.");
     return {};
 }
+namespace {
+// Omarchy's screen recordings come out at -14 LUFS with peaks under -1.5 dBFS.
+constexpr double kTakeLoudness = -14, kTakePeak = -1.5;
+// The integrated loudness of a take's audio played as stereo, or NaN without audio.
+double stereoLoudness(const QString &path) {
+    QProcess process;
+    process.start("ffmpeg", {"-nostdin", "-v", "info", "-nostats", "-i", path, "-map", "0:a:0",
+                            "-af", "aformat=channel_layouts=stereo,ebur128=framelog=verbose", "-f", "null", "-"});
+    if (!process.waitForFinished(120000)) { process.kill(); process.waitForFinished(); return NAN; }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) return NAN;
+    const auto summary = QString::fromUtf8(process.readAllStandardError()).section("Summary:", -1);
+    const auto match = QRegularExpression(R"(I:\s+(-?[\d.]+) LUFS)").match(summary);
+    return match.hasMatch() ? match.captured(1).toDouble() : NAN;
+}
+}
 QString media::normalizeMp4(const QString &path, double fps) {
     // Qt 6.11 estimates packet duration from successive PTS, which is wrong for
     // reordered frames and for the last frame of a jittery webcam stream.
     // Remux (no re-encoding), preserving PTS/DTS but assigning one nominal frame
     // duration. Gaps between presentation timestamps still hold the last image.
     const auto temporary=path+".finalizing.mp4";
+    QStringList args{"-nostdin", "-v", "error", "-y", "-i", path,
+                     "-map", "0", "-c", "copy", "-bsf:v",
+                     "setts=pts=PTS:dts=DTS:duration=1/("+QString::number(fps,'g',12)+"*TB)"};
+    // Bring the audio to the loudness of Omarchy's screen recordings, however
+    // low the microphone's gain: one gain for the whole take, and a limiter,
+    // compensated for its lookahead, for the few peaks that would then clip.
+    // Stereo like them, since players disagree on how loud mono plays. A take
+    // too quiet to measure keeps its level.
+    if (const double loudness = stereoLoudness(path); loudness > -70)
+        args << "-af" << QString("aformat=channel_layouts=stereo,volume=%1dB,alimiter=limit=%2:level=false:latency=true")
+                             .arg(kTakeLoudness - loudness, 0, 'f', 2).arg(std::pow(10, kTakePeak / 20), 0, 'f', 4)
+             << "-c:a" << "aac" << "-b:a" << "192k";
+    args << "-movflags" << "+faststart" << temporary;
     QProcess process;
-    process.start("ffmpeg", {"-nostdin", "-v", "error", "-y", "-i", path,
-                            "-map", "0", "-c", "copy", "-bsf:v",
-                            "setts=pts=PTS:dts=DTS:duration=1/("+QString::number(fps,'g',12)+"*TB)",
-                            "-movflags", "+faststart", temporary});
+    process.start("ffmpeg", args);
     if(!process.waitForFinished(120000)) {
         process.kill(); process.waitForFinished();
         return QCoreApplication::translate("media", "Finalizing the recording timed out.");

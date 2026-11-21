@@ -31,6 +31,7 @@ double peak(const QByteArray &data, const QAudioFormat &format);
 QString copyAtomically(const QString &source, const QString &destination);
 // Renames a finished partial file over destination, with the permissions a new file there would get.
 QString moveIntoPlace(const QString &partial, const QString &destination);
+// Finalizes a recorded take: nominal video packet durations, stereo audio at -14 LUFS, metadata up front.
 QString normalizeMp4(const QString &path, double fps);
 struct Probe { bool ok = false; QString error; QSize size; double duration = 0; bool audio = false; };
 Probe probe(const QString &path);

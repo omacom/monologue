@@ -320,6 +320,36 @@ private slots:
             QVERIFY(QFile::copy(directory.filePath("take.mp4"),fixture.filePath("fixture.mp4")));
         }
     }
+    void quietTakeComesOutAtScreenRecordingLoudness() {
+        // A microphone with little gain records far below Omarchy's screen
+        // recordings; finishing the take brings it to their -14 LUFS.
+        QTemporaryDir directory; const auto path=directory.filePath("quiet.mp4");
+        QAudioFormat format; format.setSampleRate(48000); format.setChannelCount(1); format.setSampleFormat(QAudioFormat::Int16);
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        QVERIFY(writer.start(path,QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,format,0));
+        QImage black(320,240,QImage::Format_RGB32); black.fill(Qt::black);
+        for(int buffer=0,frame=0;buffer<200;++buffer) {
+            for(;frame*1000000LL/30<=buffer*20000LL;++frame) writer.video(QVideoFrame(black),frame*1000000LL/30);
+            QByteArray pcm(960*2,Qt::Uninitialized); auto *samples=reinterpret_cast<qint16*>(pcm.data());
+            for(int i=0;i<960;++i) samples[i]=qint16(300*std::sin((buffer*960+i)*2*3.141592653589793*440/48000));
+            writer.audio(pcm,buffer*20000LL);
+            QTest::qWait(10);
+        }
+        writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+        QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+        const auto normalization=media::normalizeMp4(path,30);
+        QVERIFY2(normalization.isEmpty(),qPrintable(normalization));
+        QProcess meter; meter.start("ffmpeg",{"-nostdin","-v","info","-i",path,"-map","0:a:0","-af","ebur128=peak=true","-f","null","-"});
+        QVERIFY(meter.waitForFinished(30000)); QCOMPARE(meter.exitCode(),0);
+        const auto report=QString::fromUtf8(meter.readAllStandardError()).section("Summary:",-1);
+        const auto loudness=QRegularExpression(R"(I:\s+(-?[\d.]+) LUFS)").match(report).captured(1).toDouble();
+        const auto peak=QRegularExpression(R"(Peak:\s+(-?[\d.]+) dBFS)").match(report).captured(1).toDouble();
+        QVERIFY2(std::abs(loudness+14)<.5,qPrintable(QString("%1 LUFS").arg(loudness)));
+        QVERIFY2(peak<-.5,qPrintable(QString("True peak %1 dBFS").arg(peak)));
+        // Stereo, as the screen recordings are: players disagree on how loud mono plays.
+        QProcess streams; streams.start("ffprobe",{"-v","error","-select_streams","a:0","-show_entries","stream=channels","-of","csv=p=0",path});
+        QVERIFY(streams.waitForFinished()); QCOMPARE(streams.readAllStandardOutput().trimmed(),QByteArray("2"));
+    }
     void recoveryAndSave() {
         const auto directory=leaveTake("00000000-0000-0000-0000-000000000001",fixture.filePath("fixture.mp4"));
         QVERIFY(!directory.isEmpty());
