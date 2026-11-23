@@ -238,8 +238,9 @@ QList<qint64> TakeClock::joins() const {
     return result;
 }
 
-Writer::Writer(QObject *parent) : QObject(parent) {
+Writer::Writer(QObject *parent) : QObject(parent), m_recorder(this), m_flushTimeout(this) {
     m_session.setRecorder(&m_recorder);
+    m_flushTimeout.setObjectName("flushTimeout");
     m_flushTimeout.setSingleShot(true);
     m_flushTimeout.setInterval(10000);
     connect(&m_flushTimeout, &QTimer::timeout, this, [this] {

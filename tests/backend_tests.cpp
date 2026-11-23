@@ -433,6 +433,28 @@ private slots:
         QTest::qWait(100);
         QCOMPARE(ended.count(),1);
     }
+    void writerTimeoutUnblocksStalledStop() {
+        QTemporaryDir directory;
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        auto *recorder=writer.findChild<QMediaRecorder*>(); QVERIFY(recorder);
+        auto *flushTimeout=writer.findChild<QTimer*>("flushTimeout"); QVERIFY(flushTimeout);
+        bool finishedBeforeStop=false;
+        connect(&writer,&Writer::finished,&writer,[&] { finishedBeforeStop=recorder->recorderState()!=QMediaRecorder::StoppedState; });
+        QVERIFY(writer.start(directory.filePath("stalled.mp4"),
+                             QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0));
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::black);
+        writer.video(QVideoFrame(image),0);
+        QTRY_COMPARE_WITH_TIMEOUT(recorder->recorderState(),QMediaRecorder::RecordingState,5000);
+        // Fire the flush timeout while the recorder has not reached StoppedState.
+        flushTimeout->start(1);
+        QTRY_COMPARE(errors.count(),1);
+        QCOMPARE(ended.count(),1);
+        QVERIFY(finishedBeforeStop);
+        // The recorder's eventual StoppedState transition must not emit finished() a second time.
+        QTRY_COMPARE_WITH_TIMEOUT(recorder->recorderState(),QMediaRecorder::StoppedState,10000);
+        QTest::qWait(50);
+        QCOMPARE(ended.count(),1);
+    }
     void mirrorIsOnUntilTurnedOff() {
         {
             Backend backend(new FakePicker,false);
