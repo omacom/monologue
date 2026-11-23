@@ -27,7 +27,7 @@ public:
         MapData result;
         if(!m_source.map(mode)) return result;
         m_mapped=true;
-        result.planeCount=m_source.planeCount();
+        result.planeCount=std::min(m_source.planeCount(),int(std::size(result.data)));
         for(int i=0;i<result.planeCount;++i) {
             result.data[i]=m_source.bits(i);
             result.bytesPerLine[i]=m_source.bytesPerLine(i);
@@ -73,7 +73,7 @@ QString media::chooseSource(const QStringList &connected, const QString &preferr
     return connected.contains(preferred) ? preferred : connected.first();
 }
 bool media::completeJpeg(const uchar *data, qsizetype size) {
-    if (size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
+    if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
     // Some cameras pad the buffer past EOI, so look for it near the end rather than at it.
     // Up to 64 bytes of padding: EOI may start 66 bytes before the end.
     for (qsizetype i = size - 2; i >= std::max<qsizetype>(2, size - 66); --i)
@@ -148,7 +148,8 @@ double media::peak(const QByteArray &data, const QAudioFormat &format) {
     return std::min(result, 1.0);
 }
 QString media::copyAtomically(const QString &source, const QString &destination) {
-    if (QFileInfo(source).canonicalFilePath() == QFileInfo(destination).canonicalFilePath())
+    const auto canonicalSource = QFileInfo(source).canonicalFilePath();
+    if (!canonicalSource.isEmpty() && canonicalSource == QFileInfo(destination).canonicalFilePath())
         return QCoreApplication::translate("media", "Choose a destination outside the retained recording itself.");
     QFile input(source);
     if (!input.open(QIODevice::ReadOnly)) return input.errorString();
@@ -180,9 +181,9 @@ QString media::moveIntoPlace(const QString &partial, const QString &destination)
     struct stat existing;
     mode_t mode = 0666 & ~currentUmask();
     if (::stat(to.constData(), &existing) == 0) {
-        mode = existing.st_mode & 07777;
+        mode = existing.st_mode & 0777;
         // Group bits mean nothing without the group; keep the file to its owner if it can't be had.
-        if (::chown(from.constData(), uid_t(-1), existing.st_gid) != 0) mode &= 07700;
+        if (::chown(from.constData(), uid_t(-1), existing.st_gid) != 0) mode &= 0700;
     }
     if (::chmod(from.constData(), mode) != 0 || std::rename(from.constData(), to.constData()) != 0)
         return QCoreApplication::translate("media", "Could not move the finished MP4 into place.");

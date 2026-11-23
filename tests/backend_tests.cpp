@@ -21,6 +21,7 @@
 #include "writer.h"
 #include "backend.h"
 #include "translator.h"
+#include "thumbprovider.h"
 
 class FakePicker : public FilePicker {
 public:
@@ -82,6 +83,7 @@ private slots:
         QVERIFY(!complete(jpeg+QByteArray(65,'\0')));
         QVERIFY(!complete(jpeg.left(jpeg.size()*2/3)));
         QVERIFY(!complete(QByteArray("\xFF\xD9",2)));
+        QVERIFY(!media::completeJpeg(nullptr,10));
         const auto frame=[](const QByteArray &bytes) { return QVideoFrame(std::make_unique<JpegBuffer>(bytes,QSize(320,240))); };
         QVERIFY(media::completeFrame(frame(jpeg)));
         QVERIFY(!media::completeFrame(frame(jpeg.left(jpeg.size()/2))));
@@ -147,6 +149,9 @@ private slots:
         QVERIFY(media::copyAtomically(f.fileName(),dir.filePath("copy with spaces.mp4")).isEmpty());
         QVERIFY(!media::copyAtomically(f.fileName(),dir.filePath("missing/copy.mp4")).isEmpty());
         QVERIFY(!media::copyAtomically(f.fileName(),f.fileName()).isEmpty());
+        // Missing source and destination must report a file-open error rather than a same-file conflict.
+        const auto missingError=media::copyAtomically(dir.filePath("missing-src.mp4"),dir.filePath("missing-dst.mp4"));
+        QVERIFY(!missingError.isEmpty() && !missingError.contains("retained recording"));
         QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(),QByteArray("kept content"));
         // An encoded partial lands with the permissions of any new file, or of the file it replaces.
         auto partial=[&] { QTemporaryFile t(dir.filePath(".partial-XXXXXX.mp4")); t.setAutoRemove(false); return t.open() ? t.fileName() : QString(); };
@@ -160,6 +165,14 @@ private slots:
             QVERIFY(media::moveIntoPlace(partial(),dir.filePath("private.mp4")).isEmpty());
         }
         QCOMPARE(QFileInfo(dir.filePath("private.mp4")).permissions()&~QFile::ReadUser&~QFile::WriteUser,QFile::ReadOwner|QFile::WriteOwner);
+        // Special mode bits (such as sticky) on an existing file are not copied onto the saved MP4.
+        const auto sticky=dir.filePath("sticky.mp4");
+        QVERIFY(media::moveIntoPlace(partial(),sticky).isEmpty());
+        QCOMPARE(::chmod(QFile::encodeName(sticky).constData(),01644),0);
+        QVERIFY(media::moveIntoPlace(partial(),sticky).isEmpty());
+        struct stat st{};
+        QCOMPARE(::stat(QFile::encodeName(sticky).constData(),&st),0);
+        QCOMPARE(mode_t(st.st_mode & 07777),mode_t(0644));
         // A partial that can't be moved leaves the file it would have replaced alone.
         QVERIFY(!media::moveIntoPlace(dir.filePath("missing.mp4"),dir.filePath("copy with spaces.mp4")).isEmpty());
         QVERIFY(QFile::exists(dir.filePath("copy with spaces.mp4")));
@@ -191,6 +204,13 @@ private slots:
         QCOMPARE(media::thumbnail(perSecond,2.9,36),last);
         QCOMPARE(media::thumbnail(perFive,9.9,36),media::thumbnail(perFive,5.0,36));
         QVERIFY(media::thumbnail(perFive,9.9,36)!=media::thumbnail(perFive,0.0,36));
+        // Malformed image provider IDs return null instead of defaulting to index 0.
+        auto store=std::make_shared<ThumbStore>();
+        QImage marker(4,4,QImage::Format_RGB32); marker.fill(Qt::red);
+        store->reset({marker});
+        ThumbProvider provider(store);
+        QVERIFY(!provider.requestImage("1/0",nullptr,{}).isNull());
+        QVERIFY(provider.requestImage("1/notanumber",nullptr,{}).isNull());
     }
     void liveTheme() {
         QTemporaryDir d; QDir root(d.path()); root.mkpath("current"); root.mkpath("one"); root.mkpath("two");

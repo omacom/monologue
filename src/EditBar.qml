@@ -65,7 +65,7 @@ Item {
         var from = i >= 0 ? clips[i].start : 0, to = i >= 0 ? clips[i].end : durationSec
         var slack = (to - from) / 8
         var newStart = Math.max(0, from - slack), newEnd = Math.min(durationSec, to + slack)
-        if (zoomed && newStart === viewStartSec && newEnd === viewEndSec) zoomed = false
+        if ((newStart <= 0 && newEnd >= durationSec) || (zoomed && newStart === viewStartSec && newEnd === viewEndSec)) zoomed = false
         else { viewStartSec = newStart; viewEndSec = newEnd; zoomed = true }
         backend.thumbnails.request(windowStart, windowEnd)
     }
@@ -289,11 +289,12 @@ Item {
             var t = root.timeForX(mouse.x)
             if (mode === EditBar.Idle) { hover(mouse.x, mouse.y); return }
             if (mode === EditBar.Scrub) { seek(t); return }
-            if (mode !== EditBar.Trim) return
+            if (mode !== EditBar.Trim || clipIndex < 0 || clipIndex >= root.clips.length) return
             var clip = root.clips[clipIndex]
             activeTime = snap(t)
             if (leftEdge) backend.setClip(clipIndex, Math.min(activeTime, clip.end - 0.1), clip.end)
             else backend.setClip(clipIndex, clip.start, Math.max(activeTime, clip.start + 0.1))
+            if (clipIndex >= root.clips.length) return
             activeTime = leftEdge ? root.clips[clipIndex].start : root.clips[clipIndex].end
             seek(activeTime)
         }
@@ -329,6 +330,7 @@ Item {
         onCanceled: {
             if (mode === EditBar.Trim) backend.endGesture()
             mode = EditBar.Idle; clipIndex = -1
+            unhover()
         }
         function unhover() { clipHovered = -1; gapHovered = -1; splitHovered = -1; removeHovered = false; onHandle = false }
         onExited: unhover()
