@@ -326,7 +326,8 @@ void Backend::writerFinished() {
     m_finishTimeout.stop(); m_finishAt=-1;
     m_pauses.clear();
     for(const auto join:m_writer->joins()) m_pauses.append(join/1000000.0);
-    m_writer->deleteLater(); m_writer=nullptr;
+    // Destroy the writer before probing or deleting the take so the encoder finishes closing the MP4 first.
+    delete std::exchange(m_writer,nullptr);
     releaseSources(true);
     if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
     if(m_restartAfter) { m_restartAfter=false; deleteTake(); activateSources(); return; }
