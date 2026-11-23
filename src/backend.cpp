@@ -83,6 +83,7 @@ void Backend::refreshDevices() {
 void Backend::retranslate() {
     if(m_activateHardware) listDevices();
     if(!m_formatLabel.isEmpty()) { m_formatLabel=describeFormat(); emit changed(); }
+    emit meterChanged();
 }
 QString Backend::describeFormat() const {
     return tr("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
@@ -127,7 +128,7 @@ void Backend::releaseSources(bool keepPicture) {
     m_videoOrigin=-1; m_audioCapturedUntil=-1; m_videoCapturedUntil=-1;
     m_lastFrame=QVideoFrame();
     if(m_preview && !keepPicture) m_preview->setVideoFrame({});
-    m_level=m_peak=-60; emit meterChanged();
+    m_level=m_peak=-60; m_clipUntil=0; m_lastClipping=false; emit meterChanged();
 }
 void Backend::activateSources() {
     if(m_writer || m_state=="saving" || m_probing) return;
@@ -174,6 +175,10 @@ void Backend::updateReady() {
 }
 void Backend::receiveVideo(QVideoFrame frame) {
     if(!m_camera || !frame.isValid()) return;
+    // uvcvideo flags a frame the camera cut short, but Qt passes it on regardless,
+    // and it decodes as a coloured grid. Skip it, and the recording holds the frame
+    // before. A camera that sends nothing else still times out as stalled.
+    if(!media::completeFrame(frame)) return;
     // Qt maps V4L2's sRGB colorspace to BT.601 and ignores the YCbCr encoding the
     // driver reports, so HDMI capture cards sending BT.709 decode with skewed colors.
     if(!m_cameraHealthy) m_colorSpace=media::cameraColorSpace(m_camera->cameraDevice().id());
@@ -182,10 +187,6 @@ void Backend::receiveVideo(QVideoFrame frame) {
         auto format=frame.surfaceFormat(); format.setColorSpace(m_colorSpace);
         frame=media::withFormat(frame,format);
     }
-    // uvcvideo flags a frame the camera cut short, but Qt passes it on regardless,
-    // and it decodes as a coloured grid. Skip it, and the recording holds the frame
-    // before. A camera that sends nothing else still times out as stalled.
-    if(!media::completeFrame(frame)) return;
     m_lastVideoAt=now();
     if(frame.size()!=m_cameraFormat.resolution()) {
         sourceFailed(tr("The camera did not provide its maximum resolution. Choose another source or Retry.")); return;
@@ -221,6 +222,7 @@ void Backend::receiveAudio(const QByteArray &data, qint64 capturedAt) {
         m_audioHealthy=true;
         m_settings.setValue("microphone/id",m_audioId);
         if(m_audio) m_settings.setValue("microphone/label",m_microphones.value(microphoneIndex()).toMap()["label"]);
+        emit meterChanged();
         updateReady();
     }
     m_pendingPeak=std::max(m_pendingPeak,media::peak(data,m_audioFormat));
@@ -231,13 +233,23 @@ void Backend::receiveAudio(const QByteArray &data, qint64 capturedAt) {
 void Backend::tick() {
     const auto time=now();
     const double db=m_pendingPeak>0 ? std::max(-60.0,20*std::log10(m_pendingPeak)) : -60;
-    m_level=std::max(db,m_level-1.5);
+    const double level=std::max(db,m_level-1.5);
     if(db>-60) m_signalAt=time;
     if(m_pendingPeak>=.999) m_clipUntil=time+1000000;
-    if(db>=m_peak) { m_peak=db; m_peakUntil=time+700000; }
-    else if(time>m_peakUntil) m_peak=std::max(m_level,m_peak-1.5);
-    m_pendingPeak=0; emit meterChanged();
-    if(m_writer && (m_state=="recording" || m_state=="paused")) { m_duration=m_writer->duration(time)/1000000.0; emit changed(); }
+    double peak=m_peak;
+    if(db>=peak) { peak=db; m_peakUntil=time+700000; }
+    else if(time>m_peakUntil) peak=std::max(level,peak-1.5);
+    m_pendingPeak=0;
+    const bool clip=time<m_clipUntil;
+    const bool signal=time-m_signalAt<=3000000;
+    if(level!=m_level || peak!=m_peak || clip!=m_lastClipping || signal!=m_lastSignal) {
+        m_level=level; m_peak=peak; m_lastClipping=clip; m_lastSignal=signal;
+        emit meterChanged();
+    }
+    if(m_writer && (m_state=="recording" || m_state=="paused")) {
+        const double duration=m_writer->duration(time)/1000000.0;
+        if(duration!=m_duration) { m_duration=duration; emit changed(); }
+    }
     if((m_state=="starting" || m_state=="ready" || m_state=="recording" || m_state=="paused") && time-m_activatedAt>5000000) {
         if(m_camera && time-m_lastVideoAt>3000000) sourceFailed(tr("The camera stopped delivering video. Check the connection, then Retry."));
         else if(audioEnabled() && m_audio && time-m_lastAudioAt>3000000) sourceFailed(tr("The microphone stopped delivering audio. Check the connection, then Retry."));

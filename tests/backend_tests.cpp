@@ -140,6 +140,10 @@ private slots:
         QCOMPARE(media::peak(QByteArray(reinterpret_cast<char*>(samples), sizeof samples),f),1.0);
         f.setSampleFormat(QAudioFormat::Float); float floats[]{0,.5f,-.75f};
         QCOMPARE(media::peak(QByteArray(reinterpret_cast<char*>(floats),sizeof floats),f),.75);
+        f.setSampleFormat(QAudioFormat::UInt8); quint8 u8[]{128,64,192};
+        QCOMPARE(media::peak(QByteArray(reinterpret_cast<char*>(u8),sizeof u8),f),.5);
+        f.setSampleFormat(QAudioFormat::Int32); qint32 i32[]{0,1073741824,-536870912};
+        QCOMPARE(media::peak(QByteArray(reinterpret_cast<char*>(i32),sizeof i32),f),.5);
     }
     void atomicSave() {
         QTemporaryDir dir;
@@ -547,6 +551,39 @@ private slots:
         QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
         const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
         QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,qPrintable(rgb.toHex()));
+    }
+    void directRgbFormatsRecordCorrectColors() {
+        // Every 32-bit RGB layout maps directly to 4:2:0 without copying through QImage.
+        struct Case { QVideoFrameFormat::PixelFormat format; uchar px[4]; };
+        const Case cases[]{
+            {QVideoFrameFormat::Format_BGRA8888, {0,0,255,255}},
+            {QVideoFrameFormat::Format_RGBA8888, {255,0,0,255}},
+            {QVideoFrameFormat::Format_ARGB8888, {255,255,0,0}},
+            {QVideoFrameFormat::Format_ABGR8888, {255,0,0,255}},
+        };
+        QTemporaryDir directory;
+        for(int c=0;c<4;++c) {
+            const auto path=directory.filePath(QString("rgb-%1.mp4").arg(c));
+            QVideoFrameFormat fmt(QSize(64,64),cases[c].format);
+            QVideoFrame frame(fmt); QVERIFY(frame.map(QVideoFrame::WriteOnly));
+            for(int y=0;y<64;++y) {
+                auto *row=frame.bits(0)+y*frame.bytesPerLine(0);
+                for(int x=0;x<64;++x) std::memcpy(row+x*4,cases[c].px,4);
+            }
+            frame.unmap();
+            QCOMPARE(frame.toImage().pixelColor(0,0),QColor(255,0,0));
+            Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+            QVERIFY(writer.start(path,fmt,30,QAudioFormat(),0));
+            for(int i=0;i<5;++i) { writer.video(frame,qRound64(i*1000000.0/30)); QTest::qWait(33); }
+            writer.pause(200000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+            QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+            QProcess pixels;
+            pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
+            QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
+            const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
+            QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,
+                     qPrintable(QString("case %1: %2").arg(c).arg(QString::fromLatin1(rgb.toHex()))));
+        }
     }
     void relabelledCameraRecordsItsColorSpace() {
         // A Cam Link sends packed 4:2:2 that Qt labels BT.601; once relabelled from
