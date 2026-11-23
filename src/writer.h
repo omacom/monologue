@@ -23,6 +23,8 @@ public:
     QList<qint64> joins() const;
     bool paused() const { return m_paused; }
     qint64 intervalStart() const { return m_start; }
+    // Capture time where the current pause began, or -1 while running.
+    qint64 closedAt() const;
 private:
     struct Interval { qint64 begin, end, position; };
     QList<Interval> m_intervals;
@@ -42,6 +44,7 @@ public:
     void resume(qint64 now);
     void finish();
     qint64 duration(qint64 now) const { return m_clock.duration(now); }
+    qint64 pausedAt() const { return m_clock.closedAt(); }
     QList<qint64> joins() const { return m_clock.joins(); }
     static bool supported(bool audio);
 signals:
@@ -50,6 +53,7 @@ signals:
 private:
     void drain();
     void fail(const QString &message);
+    void emitFinished();
     void appendAudio(const QByteArray &data);
     void padAudioTo(qint64 time);
     // fromCamera lets a jittered frame take the next free slot; the repeated tail frame must not.
@@ -69,5 +73,5 @@ private:
     double m_fps = 30;
     qint64 m_queuedAudioUs = 0;
     qint64 m_audioFramesWritten = 0;
-    bool m_stopping = false, m_failed = false, m_draining = false;
+    bool m_stopping = false, m_failed = false, m_draining = false, m_finished = false;
 };
