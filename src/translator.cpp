@@ -104,6 +104,8 @@ QLocale Translator::formatLocale(const QString &language) {
 QString Translator::translate(const char *, const char *sourceText, const char *, int n) const {
     // A null string tells Qt there is no translation, so it shows the English.
     QReadLocker locker(&m_lock);
+    if (m_strings.isEmpty())
+        return {};
     const Entry entry = m_strings.value(QString::fromUtf8(sourceText));
     const QJsonValue &value = entry.value;
     if (value.isString())

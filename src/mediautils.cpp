@@ -131,19 +131,36 @@ QCameraFormat media::bestCameraFormat(const QCameraDevice &device) {
     return index < 0 ? QCameraFormat() : formats[index];
 }
 double media::peak(const QByteArray &data, const QAudioFormat &format) {
-    double result = 0;
     const int bytes = format.bytesPerSample();
     if (!bytes) return 0;
-    for (qsizetype offset = 0; offset + bytes <= data.size(); offset += bytes) {
-        double sample = 0;
-        switch (format.sampleFormat()) {
-        case QAudioFormat::UInt8: sample = (quint8(data[offset]) - 128) / 128.0; break;
-        case QAudioFormat::Int16: { qint16 v; std::memcpy(&v, data.constData() + offset, 2); sample = v / 32768.0; break; }
-        case QAudioFormat::Int32: { qint32 v; std::memcpy(&v, data.constData() + offset, 4); sample = v / 2147483648.0; break; }
-        case QAudioFormat::Float: { float v; std::memcpy(&v, data.constData() + offset, 4); sample = std::isfinite(v) ? v : 0; break; }
-        default: break;
+    const char *raw = data.constData();
+    const qsizetype count = data.size() / bytes;
+    double result = 0;
+    switch (format.sampleFormat()) {
+    case QAudioFormat::UInt8:
+        for (qsizetype i = 0; i < count; ++i)
+            result = std::max(result, std::abs(int(quint8(raw[i])) - 128) / 128.0);
+        break;
+    case QAudioFormat::Int16:
+        for (qsizetype i = 0; i < count; ++i) {
+            qint16 v; std::memcpy(&v, raw + i * 2, 2);
+            result = std::max(result, std::abs(double(v)) / 32768.0);
         }
-        result = std::max(result, std::abs(sample));
+        break;
+    case QAudioFormat::Int32:
+        for (qsizetype i = 0; i < count; ++i) {
+            qint32 v; std::memcpy(&v, raw + i * 4, 4);
+            result = std::max(result, std::abs(double(v)) / 2147483648.0);
+        }
+        break;
+    case QAudioFormat::Float:
+        for (qsizetype i = 0; i < count; ++i) {
+            float v; std::memcpy(&v, raw + i * 4, 4);
+            if (std::isfinite(v)) result = std::max(result, std::abs(double(v)));
+        }
+        break;
+    default:
+        break;
     }
     return std::min(result, 1.0);
 }

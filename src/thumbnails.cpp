@@ -7,15 +7,16 @@ Thumbnails::~Thumbnails() { cancel(); m_pool.waitForDone(); }
 void Thumbnails::cancel() {
     if (m_cancel) m_cancel->store(true);
     m_cancel.reset();
+    m_pool.clear();
 }
 void Thumbnails::clear() {
-    cancel(); m_path.clear(); m_duration = 0; m_whole.clear();
+    cancel(); m_path.clear(); m_duration = 0; m_start = 0; m_end = 0; m_whole.clear();
     m_images = QVector<QImage>(Count); m_store->reset(m_images); m_ready = 0; ++m_revision;
     emit changed();
 }
 void Thumbnails::load(const QString &path, double duration) {
-    clear();
-    m_path = path; m_duration = duration; m_start = 0; m_end = duration;
+    if (path.isEmpty() || duration <= 0) { clear(); return; }
+    m_path = path; m_duration = duration; m_start = 0; m_end = duration; m_whole.clear();
     generate();
 }
 void Thumbnails::request(double start, double end) {
@@ -45,10 +46,14 @@ void Thumbnails::generate() {
 }
 void Thumbnails::arrived(int revision, int index, const QImage &image) {
     if (revision != m_revision) return;
-    // A frame ffmpeg couldn't extract shows as the empty strip, not as an uninitialized pixel.
-    QImage placeholder(1, 1, QImage::Format_RGB32);
-    placeholder.fill(QColor(0x1c, 0x1c, 0x1e));
-    m_images[index] = image.isNull() ? placeholder : image;
+    if (image.isNull()) {
+        // A frame ffmpeg couldn't extract shows as the empty strip, not as an uninitialized pixel.
+        QImage placeholder(1, 1, QImage::Format_RGB32);
+        placeholder.fill(QColor(0x1c, 0x1c, 0x1e));
+        m_images[index] = placeholder;
+    } else {
+        m_images[index] = image;
+    }
     m_store->set(index, m_images[index]);
     // Reveal in order, so the strip fills from left to right.
     while (m_ready < Count && !m_images[m_ready].isNull()) ++m_ready;

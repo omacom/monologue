@@ -48,8 +48,8 @@ void Theme::refreshRounding() {
 QString Theme::readAccent(const QString &path) {
     QFile file(path);
     if (file.open(QIODevice::ReadOnly)) {
-        const QRegularExpression expression(R"re(^\s*accent\s*=\s*["'](#[0-9a-fA-F]{6})["']\s*(?:#.*)?$)re",
-                                            QRegularExpression::MultilineOption);
+        static const QRegularExpression expression(R"re(^\s*accent\s*=\s*["'](#[0-9a-fA-F]{6})["']\s*(?:#.*)?$)re",
+                                                   QRegularExpression::MultilineOption);
         const auto match = expression.match(QString::fromUtf8(file.readAll()));
         if (match.hasMatch()) return match.captured(1);
     }

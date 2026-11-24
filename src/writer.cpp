@@ -96,9 +96,11 @@ private:
         if(!tj || !m_source.map(QVideoFrame::ReadOnly)) return false;
         bool decoded=false;
         const auto *jpeg=m_source.bits(0);
-        const size_t size=size_t(m_source.mappedBytes(0));
-        if(tj3DecompressHeader(tj, jpeg, size)==0 &&
+        const qsizetype mapped=m_source.mappedBytes(0);
+        if(jpeg && mapped>0 &&
+           tj3DecompressHeader(tj, jpeg, size_t(mapped))==0 &&
            tj3Get(tj, TJPARAM_JPEGWIDTH)==w && tj3Get(tj, TJPARAM_JPEGHEIGHT)==h) {
+            const size_t size=size_t(mapped);
             const int subsamp=tj3Get(tj, TJPARAM_SUBSAMP);
             if(subsamp==TJSAMP_420) {
                 unsigned char *planes[3]={y,u,v};
@@ -111,12 +113,17 @@ private:
                 std::memset(u, 128, size_t(cw)*ch*2);
             } else if(subsamp>=0) {
                 const int sw=tj3YUVPlaneWidth(1, w, subsamp), sh=tj3YUVPlaneHeight(1, h, subsamp);
-                QByteArray chroma(qsizetype(sw)*sh*2, Qt::Uninitialized);
-                auto *su=reinterpret_cast<uchar*>(chroma.data()), *sv=su+sw*sh;
-                unsigned char *planes[3]={y,su,sv};
-                int strides[3]={w,sw,sw};
-                decoded=decodePlanes(tj, jpeg, size, planes, strides);
-                if(decoded) { resample(su, sw, sh, u, cw, ch); resample(sv, sw, sh, v, cw, ch); }
+                if(sw>0 && sh>0) {
+                    // Reuse a per-thread chroma scratch buffer instead of reallocating it on every non-4:2:0 JPEG frame.
+                    thread_local QByteArray chroma;
+                    const qsizetype needed=qsizetype(sw)*sh*2;
+                    if(chroma.size()<needed) chroma.resize(needed);
+                    auto *su=reinterpret_cast<uchar*>(chroma.data()), *sv=su+qsizetype(sw)*sh;
+                    unsigned char *planes[3]={y,su,sv};
+                    int strides[3]={w,sw,sw};
+                    decoded=decodePlanes(tj, jpeg, size, planes, strides);
+                    if(decoded) { resample(su, sw, sh, u, cw, ch); resample(sv, sw, sh, v, cw, ch); }
+                }
             }
         }
         m_source.unmap();
@@ -145,10 +152,11 @@ private:
         if(!m_source.map(QVideoFrame::ReadOnly)) return false;
         const int w=m_format.frameWidth(), h=m_format.frameHeight(), cw=(w+1)/2;
         const uchar *src=m_source.bits(0); const int stride=m_source.bytesPerLine(0);
+        if(!src || stride<cw*4 || m_source.mappedBytes(0)<qsizetype(h)*stride) { m_source.unmap(); return false; }
         for(int row=0; row<h; ++row) {
             const uchar *line=src+qsizetype(row)*stride;
             uchar *out=y+qsizetype(row)*w;
-            for(int x=0; x<w; ++x) out[x]=line[(x/2)*4+y0+(x&1)*2];
+            for(int x=0; x<w; ++x) out[x]=line[x*2+y0];
             if(row&1) continue;
             const uchar *next=row+1<h ? line+stride : line;
             uchar *ou=u+qsizetype(row/2)*cw, *ov=v+qsizetype(row/2)*cw;
@@ -160,31 +168,52 @@ private:
         m_source.unmap();
         return true;
     }
-    // RGB of any layout, via QImage, to limited-range BT.601.
-    bool fromRgb(uchar *y, uchar *u, uchar *v) {
-        const QImage image=m_source.toImage().convertToFormat(QImage::Format_RGB32);
+    static bool rgbOffsets(QVideoFrameFormat::PixelFormat format, int &r, int &g, int &b) {
+        switch (format) {
+        case QVideoFrameFormat::Format_BGRA8888: case QVideoFrameFormat::Format_BGRX8888: r=2; g=1; b=0; return true;
+        case QVideoFrameFormat::Format_RGBA8888: case QVideoFrameFormat::Format_RGBX8888: r=0; g=1; b=2; return true;
+        case QVideoFrameFormat::Format_ARGB8888: case QVideoFrameFormat::Format_XRGB8888: r=1; g=2; b=3; return true;
+        case QVideoFrameFormat::Format_ABGR8888: case QVideoFrameFormat::Format_XBGR8888: r=3; g=2; b=1; return true;
+        default: return false;
+        }
+    }
+    void convertRgb(const uchar *src, int stride, int r0, int g0, int b0, uchar *y, uchar *u, uchar *v) const {
         const int w=m_format.frameWidth(), h=m_format.frameHeight(), cw=(w+1)/2;
-        if(image.size()!=QSize(w,h)) return false;
         for(int row=0; row<h; ++row) {
-            const auto *line=reinterpret_cast<const QRgb*>(image.constScanLine(row));
+            const uchar *line=src+qsizetype(row)*stride;
             uchar *out=y+qsizetype(row)*w;
             for(int x=0; x<w; ++x) {
-                const int r=qRed(line[x]), g=qGreen(line[x]), b=qBlue(line[x]);
-                out[x]=uchar(((66*r+129*g+25*b+128)>>8)+16);
+                const uchar *p=line+x*4;
+                out[x]=uchar(((66*p[r0]+129*p[g0]+25*p[b0]+128)>>8)+16);
             }
             if(row&1) continue;
-            const auto *next=row+1<h ? reinterpret_cast<const QRgb*>(image.constScanLine(row+1)) : line;
+            const uchar *next=row+1<h ? line+stride : line;
             uchar *ou=u+qsizetype(row/2)*cw, *ov=v+qsizetype(row/2)*cw;
             for(int x=0; x<cw; ++x) {
-                const int x1=std::min(2*x+1, w-1);
-                const QRgb p[4]={line[2*x], line[x1], next[2*x], next[x1]};
-                int r=0, g=0, b=0;
-                for(const QRgb c:p) { r+=qRed(c); g+=qGreen(c); b+=qBlue(c); }
-                r=(r+2)/4; g=(g+2)/4; b=(b+2)/4;
+                const int x0=2*x*4, x1=std::min(2*x+1, w-1)*4;
+                const int r=(line[x0+r0]+line[x1+r0]+next[x0+r0]+next[x1+r0]+2)>>2;
+                const int g=(line[x0+g0]+line[x1+g0]+next[x0+g0]+next[x1+g0]+2)>>2;
+                const int b=(line[x0+b0]+line[x1+b0]+next[x0+b0]+next[x1+b0]+2)>>2;
                 ou[x]=uchar(((-38*r-74*g+112*b+128)>>8)+128);
                 ov[x]=uchar(((112*r-94*g-18*b+128)>>8)+128);
             }
         }
+    }
+    // RGB to limited-range BT.601; map directly when possible to avoid two full-frame QImage copies.
+    bool fromRgb(uchar *y, uchar *u, uchar *v) {
+        const int w=m_format.frameWidth(), h=m_format.frameHeight();
+        int r0=0, g0=0, b0=0;
+        if(rgbOffsets(m_source.pixelFormat(), r0, g0, b0) && m_source.map(QVideoFrame::ReadOnly)) {
+            const uchar *src=m_source.bits(0);
+            const int stride=m_source.bytesPerLine(0);
+            const bool ok=src && stride>=w*4 && m_source.mappedBytes(0)>=qsizetype(h)*stride;
+            if(ok) convertRgb(src, stride, r0, g0, b0, y, u, v);
+            m_source.unmap();
+            if(ok) return true;
+        }
+        const QImage image=m_source.toImage().convertToFormat(QImage::Format_RGBA8888);
+        if(image.size()!=QSize(w,h)) return false;
+        convertRgb(image.constBits(), image.bytesPerLine(), 0, 1, 2, y, u, v);
         return true;
     }
     QVideoFrame m_source;
