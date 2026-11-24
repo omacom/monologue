@@ -575,14 +575,14 @@ ApplicationWindow {
         videoOutput: clipVideo
         audioOutput: win.playbackOutput
         // Play only the clips: hop over gaps and stop after the last clip.
-        onPositionChanged: {
+        onPositionChanged: pos => {
             if (playbackState === MediaPlayer.PlayingState) {
-                var t = position / 1000, next = win.playableFrom(t)
+                var t = pos / 1000, next = win.playableFrom(t)
                 // Past the last clip: stop where we are. Seeking to its end could land past the final frame.
                 if (next < 0) { pause(); editBar.playheadSec = backend.clips[backend.clips.length - 1].end; return }
                 if (next - t > 0.05) { position = Math.round(next * 1000); return }
             }
-            if (!editBar.interacting) editBar.playheadSec = position / 1000
+            if (!editBar.interacting) editBar.playheadSec = pos / 1000
         }
         // Show the first kept frame rather than black until Play, once per clip.
         property bool primed: false
