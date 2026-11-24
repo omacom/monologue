@@ -102,14 +102,17 @@ private slots:
         QCOMPARE(frame.toImage().size(),QSize(4,4));
     }
     void clockExcludesPauses() {
-        TakeClock c; c.start(1000000);
+        TakeClock c;
+        c.pause(500000); QCOMPARE(c.pausedAt(),qint64(-1));
+        c.start(1000000);
+        QCOMPARE(c.pausedAt(),qint64(-1));
         QVERIFY(!c.position(999999));
-        c.pause(6000000); QCOMPARE(c.duration(16000000),5000000);
-        QVERIFY(!c.position(10000000)); c.resume(16000000);
+        c.pause(6000000); QCOMPARE(c.duration(16000000),5000000); QCOMPARE(c.pausedAt(),qint64(6000000));
+        QVERIFY(!c.position(10000000)); c.resume(16000000); QCOMPARE(c.pausedAt(),qint64(-1));
         QCOMPARE(*c.position(16000000),5000000);
         QCOMPARE(c.duration(21000000),10000000);
         QVERIFY(!c.position(15999999));
-        c.pause(21000000); c.pause(23000000); QCOMPARE(c.duration(23000000),10000000);
+        c.pause(21000000); c.pause(23000000); QCOMPARE(c.duration(23000000),10000000); QCOMPARE(c.pausedAt(),qint64(21000000));
         QCOMPARE(*c.position(5900000),4900000); // Late delivery from a closed interval.
         const auto parts=c.spans(5900000,16100000);
         QCOMPARE(parts.size(),2);
@@ -416,7 +419,42 @@ private slots:
         QVERIFY(quint8(rgb[rgb.size()-3])<80 && quint8(rgb[rgb.size()-1])>180);
         // Leaving the editor deletes the take.
         backend.closeTake(); QVERIFY(!QDir(directory).exists()); QVERIFY(QFile::exists(saved));
-        QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.unsaved());
+        QVERIFY(backend.clip().isEmpty()); QVERIFY(!backend.unsaved()); QCOMPARE(backend.duration(),0.0);
+    }
+    void writerFailureAlwaysFinishesOnce() {
+        QTemporaryDir directory;
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        writer.start(directory.filePath("missing/take.mp4"),
+                     QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0);
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::black);
+        writer.video(QVideoFrame(image),0);
+        QTRY_VERIFY_WITH_TIMEOUT(!errors.isEmpty(),10000);
+        QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),10000);
+        QTest::qWait(100);
+        QCOMPARE(ended.count(),1);
+    }
+    void writerTimeoutUnblocksStalledStop() {
+        QTemporaryDir directory;
+        Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+        auto *recorder=writer.findChild<QMediaRecorder*>(); QVERIFY(recorder);
+        auto *flushTimeout=writer.findChild<QTimer*>("flushTimeout"); QVERIFY(flushTimeout);
+        bool finishedBeforeStop=false;
+        connect(&writer,&Writer::finished,&writer,[&] { finishedBeforeStop=recorder->recorderState()!=QMediaRecorder::StoppedState; });
+        QVERIFY(writer.start(directory.filePath("stalled.mp4"),
+                             QVideoFrameFormat(QSize(320,240),QVideoFrameFormat::Format_BGRA8888),30,QAudioFormat(),0));
+        QImage image(320,240,QImage::Format_RGB32); image.fill(Qt::black);
+        writer.video(QVideoFrame(image),0);
+        QTRY_COMPARE_WITH_TIMEOUT(recorder->recorderState(),QMediaRecorder::RecordingState,5000);
+        // Fire the flush timeout while the recorder has not reached StoppedState.
+        flushTimeout->start(1);
+        QTRY_COMPARE(errors.count(),1);
+        QCOMPARE(ended.count(),1);
+        QVERIFY(writer.timedOut());
+        QVERIFY(finishedBeforeStop);
+        // The recorder's eventual StoppedState transition must not emit finished() a second time.
+        QTRY_COMPARE_WITH_TIMEOUT(recorder->recorderState(),QMediaRecorder::StoppedState,10000);
+        QTest::qWait(50);
+        QCOMPARE(ended.count(),1);
     }
     void mirrorIsOnUntilTurnedOff() {
         {
