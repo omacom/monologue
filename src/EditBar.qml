@@ -294,7 +294,6 @@ Item {
             activeTime = snap(t)
             if (leftEdge) backend.setClip(clipIndex, Math.min(activeTime, clip.end - 0.1), clip.end)
             else backend.setClip(clipIndex, clip.start, Math.max(activeTime, clip.start + 0.1))
-            if (clipIndex >= root.clips.length) return
             activeTime = leftEdge ? root.clips[clipIndex].start : root.clips[clipIndex].end
             seek(activeTime)
         }

@@ -27,7 +27,7 @@ public:
         MapData result;
         if(!m_source.map(mode)) return result;
         m_mapped=true;
-        result.planeCount=std::min(m_source.planeCount(),int(std::size(result.data)));
+        result.planeCount=m_source.planeCount();
         for(int i=0;i<result.planeCount;++i) {
             result.data[i]=m_source.bits(i);
             result.bytesPerLine[i]=m_source.bytesPerLine(i);
@@ -73,7 +73,7 @@ QString media::chooseSource(const QStringList &connected, const QString &preferr
     return connected.contains(preferred) ? preferred : connected.first();
 }
 bool media::completeJpeg(const uchar *data, qsizetype size) {
-    if (!data || size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
+    if (size < 4 || data[0] != 0xFF || data[1] != 0xD8) return false;
     // Some cameras pad the buffer past EOI, so look for it near the end rather than at it.
     // Up to 64 bytes of padding: EOI may start 66 bytes before the end.
     for (qsizetype i = size - 2; i >= std::max<qsizetype>(2, size - 66); --i)

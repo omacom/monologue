@@ -213,21 +213,24 @@ QtObject {
         QTest::mouseMove(window,remove); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,remove);
         QTest::mouseMove(window,remove-QPoint(40,0)); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,remove-QPoint(40,0));
         QCOMPARE(clips().size(),2);
-        // A handle drag that loses its press, rather than being released, still ends the gesture.
+        // A handle drag that loses its press, rather than being released, still ends the gesture and clears hover.
+        auto *area=bar->findChild<QObject*>("timelineArea"); QVERIFY(area);
         const QPoint handle(xFor(0)+6,at60.y());
         QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
         QCOMPARE(backend->property("gestures").toInt(),1); QVERIFY(bar->property("interacting").toBool());
         QVERIFY(window->mouseGrabberItem()); window->mouseGrabberItem()->ungrabMouse();
         QCOMPARE(backend->property("gestures").toInt(),0); QVERIFY(!bar->property("interacting").toBool());
+        QCOMPARE(area->property("clipHovered").toInt(),-1); QVERIFY(!area->property("onHandle").toBool());
         QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,handle);
         // A drag that ends off the bar leaves nothing hovered: no exit follows to clear it.
-        auto *area=bar->findChild<QObject*>("timelineArea"); QVERIFY(area);
         QTest::mouseMove(window,handle); QTest::mousePress(window,Qt::LeftButton,Qt::NoModifier,handle);
         const QPoint below(handle.x()+40,barOrigin.y()+int(bar->height())+80);
         QTest::mouseMove(window,below); QTest::mouseRelease(window,Qt::LeftButton,Qt::NoModifier,below);
         QCOMPARE(area->property("clipHovered").toInt(),-1); QVERIFY(!area->property("onHandle").toBool());
         QTest::mouseDClick(window,Qt::LeftButton,Qt::NoModifier,QPoint(xFor(61.5)+1,at60.y()));
         QCOMPARE(clips().size(),1);
+        // Zooming when the clip already spans the whole take stays unzoomed.
+        QTest::keyClick(window,Qt::Key_Z); QVERIFY(!bar->property("zoomed").toBool());
         backend->setProperty("state","recording");
         QTest::keyClick(window,Qt::Key_Return,Qt::ControlModifier); QCOMPARE(backend->property("state").toString(),QString("finished"));
         // Finalizing keeps the picture clear: progress shows where the timeline will appear.

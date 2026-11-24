@@ -52,7 +52,6 @@ ApplicationWindow {
     function togglePlayback() {
         if (playbackOutput === null) playbackOutput = playbackAudio.createObject(win)
         if (player.playbackState === MediaPlayer.PlayingState) { player.pause(); return }
-        if (backend.clips.length === 0) return
         var from = playableFrom(editBar.playheadSec)
         seekTo(from < 0 ? backend.clips[0].start : from)
         player.play()
@@ -65,7 +64,6 @@ ApplicationWindow {
     }
     function restoreGap(gap) {
         var clips = backend.clips
-        if (clips.length === 0) return
         if (gap === 0) backend.setClip(0, 0, clips[0].end)
         else if (gap === clips.length) backend.setClip(gap - 1, clips[gap - 1].start, backend.duration)
         else backend.joinClips(gap - 1)
@@ -87,7 +85,6 @@ ApplicationWindow {
     function jumpToPause(direction) {
         var marks = backend.pauses.slice()
         for (var c = 0; c < backend.clips.length; ++c) marks.push(backend.clips[c].start, backend.clips[c].end)
-        if (marks.length === 0) return
         marks.sort((a, b) => a - b)
         var t = editBar.playheadSec, target = direction > 0 ? marks[marks.length - 1] : marks[0]
         for (var i = 0; i < marks.length; ++i) {
@@ -582,11 +579,7 @@ ApplicationWindow {
             if (playbackState === MediaPlayer.PlayingState) {
                 var t = pos / 1000, next = win.playableFrom(t)
                 // Past the last clip: stop where we are. Seeking to its end could land past the final frame.
-                if (next < 0) {
-                    pause()
-                    if (backend.clips.length > 0) editBar.playheadSec = backend.clips[backend.clips.length - 1].end
-                    return
-                }
+                if (next < 0) { pause(); editBar.playheadSec = backend.clips[backend.clips.length - 1].end; return }
                 if (next - t > 0.05) { position = Math.round(next * 1000); return }
             }
             if (!editBar.interacting) editBar.playheadSec = pos / 1000
