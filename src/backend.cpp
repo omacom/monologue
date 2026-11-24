@@ -252,7 +252,12 @@ void Backend::sourceFailed(const QString &message) {
     if(m_state=="finished" || m_state=="saving" || m_state=="finalizing" || m_state=="unavailable") return;
     m_message=message;
     if(m_writer) { m_interruption=message; finish(); }
-    else { m_state="unavailable"; releaseSources(); }
+    else {
+        m_state="unavailable";
+        // Defer hardware teardown so a synchronous failure (such as a bad frame size in receiveVideo)
+        // never deletes QCamera while it is still delivering that frame.
+        QTimer::singleShot(0,this,[this] { if(m_state=="unavailable") releaseSources(); });
+    }
     emit changed();
 }
 void Backend::selectCamera(int index) {
@@ -324,13 +329,21 @@ void Backend::finishWhenCaptured() {
 void Backend::writerFinished() {
     if(!m_writer) return;
     m_finishTimeout.stop(); m_finishAt=-1;
+    const bool timedOut=m_writer->timedOut();
     m_pauses.clear();
     for(const auto join:m_writer->joins()) m_pauses.append(join/1000000.0);
-    // Destroy the writer before probing or deleting the take so the encoder finishes closing the MP4 first.
-    delete std::exchange(m_writer,nullptr);
+    m_writer->deleteLater(); m_writer=nullptr;
     releaseSources(true);
     if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
     if(m_restartAfter) { m_restartAfter=false; deleteTake(); activateSources(); return; }
+    if(timedOut) {
+        // The encoder never reached StoppedState; don't race normalizeMp4 against it or delete the take folder.
+        m_takeLock.reset();
+        m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear(); m_duration=0;
+        resetEdit({},{}); m_thumbnails.clear();
+        m_state="unavailable"; m_message=m_interruption; emit changed();
+        return;
+    }
     probeClip(m_clipPath,true);
 }
 void Backend::probeClip(const QString &path,bool currentTake) {
@@ -431,7 +444,7 @@ void Backend::exportTo(const QString &destination) {
     m_exportPartial=partial.fileName();
     partial.close();
     const double total=keptDuration();
-    m_state="saving"; m_message=tr("Saving your clip…"); m_saveProgress=0; m_exportError.clear(); emit changed();
+    m_state="saving"; m_message=tr("Saving your clip…"); m_saveProgress=0; emit changed();
     m_export=new QProcess(this);
     connect(m_export,&QProcess::readyReadStandardOutput,this,[this,total] {
         while(m_export->canReadLine()) {
@@ -446,18 +459,12 @@ void Backend::exportTo(const QString &destination) {
             }
         }
     });
-    connect(m_export,&QProcess::readyReadStandardError,this,[this] {
-        const auto chunk=m_export->readAllStandardError();
-        if(m_exportError.size()<4096) m_exportError.append(chunk.left(4096-m_exportError.size()));
-    });
     connect(m_export,&QProcess::finished,this,[this,destination](int code,QProcess::ExitStatus status) {
         auto *process=std::exchange(m_export,nullptr);
         process->deleteLater();
         QString error;
         if(status!=QProcess::NormalExit || code!=0) {
-            const auto tail=process->readAllStandardError();
-            if(m_exportError.size()<4096) m_exportError.append(tail.left(4096-m_exportError.size()));
-            error=QString::fromUtf8(m_exportError).trimmed().left(500);
+            error=QString::fromUtf8(process->readAllStandardError()).trimmed().left(500);
             if(error.isEmpty()) error=tr("ffmpeg could not encode the clip.");
         } else error=media::moveIntoPlace(m_exportPartial,destination);
         saved(destination,error);
@@ -471,7 +478,7 @@ void Backend::exportTo(const QString &destination) {
 }
 void Backend::saved(const QString &destination,const QString &error) {
     if(!error.isEmpty() && !m_exportPartial.isEmpty()) QFile::remove(m_exportPartial);
-    m_exportPartial.clear(); m_exportError.clear();
+    m_exportPartial.clear();
     m_state="finished"; m_saveProgress=0;
     m_message=error.isEmpty()?tr("Saved to %1").arg(destination):tr("Could not save: %1").arg(error);
     if(error.isEmpty()) {

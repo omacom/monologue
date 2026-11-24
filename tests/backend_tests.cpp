@@ -103,16 +103,16 @@ private slots:
     }
     void clockExcludesPauses() {
         TakeClock c;
-        c.pause(500000); QCOMPARE(c.closedAt(),qint64(-1));
+        c.pause(500000); QCOMPARE(c.pausedAt(),qint64(-1));
         c.start(1000000);
-        QCOMPARE(c.closedAt(),qint64(-1));
+        QCOMPARE(c.pausedAt(),qint64(-1));
         QVERIFY(!c.position(999999));
-        c.pause(6000000); QCOMPARE(c.duration(16000000),5000000); QCOMPARE(c.closedAt(),qint64(6000000));
-        QVERIFY(!c.position(10000000)); c.resume(16000000); QCOMPARE(c.closedAt(),qint64(-1));
+        c.pause(6000000); QCOMPARE(c.duration(16000000),5000000); QCOMPARE(c.pausedAt(),qint64(6000000));
+        QVERIFY(!c.position(10000000)); c.resume(16000000); QCOMPARE(c.pausedAt(),qint64(-1));
         QCOMPARE(*c.position(16000000),5000000);
         QCOMPARE(c.duration(21000000),10000000);
         QVERIFY(!c.position(15999999));
-        c.pause(21000000); c.pause(23000000); QCOMPARE(c.duration(23000000),10000000); QCOMPARE(c.closedAt(),qint64(21000000));
+        c.pause(21000000); c.pause(23000000); QCOMPARE(c.duration(23000000),10000000); QCOMPARE(c.pausedAt(),qint64(21000000));
         QCOMPARE(*c.position(5900000),4900000); // Late delivery from a closed interval.
         const auto parts=c.spans(5900000,16100000);
         QCOMPARE(parts.size(),2);
@@ -449,6 +449,7 @@ private slots:
         flushTimeout->start(1);
         QTRY_COMPARE(errors.count(),1);
         QCOMPARE(ended.count(),1);
+        QVERIFY(writer.timedOut());
         QVERIFY(finishedBeforeStop);
         // The recorder's eventual StoppedState transition must not emit finished() a second time.
         QTRY_COMPARE_WITH_TIMEOUT(recorder->recorderState(),QMediaRecorder::StoppedState,10000);

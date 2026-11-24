@@ -204,7 +204,7 @@ void TakeClock::pause(qint64 now) {
         m_paused = true;
     }
 }
-qint64 TakeClock::closedAt() const {
+qint64 TakeClock::pausedAt() const {
     return m_paused && !m_intervals.isEmpty() ? m_intervals.last().end : -1;
 }
 void TakeClock::resume(qint64 now) {
@@ -242,8 +242,9 @@ Writer::Writer(QObject *parent) : QObject(parent), m_recorder(this), m_flushTime
     m_session.setRecorder(&m_recorder);
     m_flushTimeout.setObjectName("flushTimeout");
     m_flushTimeout.setSingleShot(true);
-    m_flushTimeout.setInterval(10000);
+    m_flushTimeout.setInterval(30000);
     connect(&m_flushTimeout, &QTimer::timeout, this, [this] {
+        m_timedOut = true;
         fail(tr("The encoder stopped responding, so the take was stopped."));
         emitFinished();
     });
@@ -369,14 +370,9 @@ void Writer::appendAudio(const QByteArray &data) {
 void Writer::drain() {
     if (m_draining || m_failed) return;
     m_draining = true;
-    while (!m_failed && !m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) {
-        if (!m_frames.isEmpty()) m_frames.dequeue();
-    }
+    while (!m_failed && !m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) m_frames.dequeue();
     while (!m_failed && !m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
-        if (!m_buffers.isEmpty()) {
-            m_queuedAudioUs -= m_buffers.head().duration();
-            m_buffers.dequeue();
-        }
+        m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
     }
     m_draining = false;
     if (!m_failed && m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();

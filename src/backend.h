@@ -173,7 +173,6 @@ private:
     Thumbnails m_thumbnails;
     QProcess *m_export = nullptr;
     QString m_exportPartial;
-    QByteArray m_exportError;
     double m_saveProgress = 0;
     bool m_gesture = false, m_gestureRecorded = false, m_clipAudio = false;
     qint64 m_lastVideoAt = 0, m_lastAudioAt = 0, m_activatedAt = 0;

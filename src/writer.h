@@ -24,7 +24,7 @@ public:
     bool paused() const { return m_paused; }
     qint64 intervalStart() const { return m_start; }
     // Capture time where the current pause began, or -1 while running.
-    qint64 closedAt() const;
+    qint64 pausedAt() const;
 private:
     struct Interval { qint64 begin, end, position; };
     QList<Interval> m_intervals;
@@ -44,7 +44,8 @@ public:
     void resume(qint64 now);
     void finish();
     qint64 duration(qint64 now) const { return m_clock.duration(now); }
-    qint64 pausedAt() const { return m_clock.closedAt(); }
+    qint64 pausedAt() const { return m_clock.pausedAt(); }
+    bool timedOut() const { return m_timedOut; }
     QList<qint64> joins() const { return m_clock.joins(); }
     static bool supported(bool audio);
 signals:
@@ -73,5 +74,5 @@ private:
     double m_fps = 30;
     qint64 m_queuedAudioUs = 0;
     qint64 m_audioFramesWritten = 0;
-    bool m_stopping = false, m_failed = false, m_draining = false, m_finished = false;
+    bool m_stopping = false, m_failed = false, m_draining = false, m_finished = false, m_timedOut = false;
 };
