@@ -227,11 +227,14 @@ void TakeClock::start(qint64 now) {
     m_intervals = {{now, std::numeric_limits<qint64>::max(), 0}};
 }
 void TakeClock::pause(qint64 now) {
-    if (!m_paused) {
+    if (!m_paused && !m_intervals.isEmpty()) {
         m_intervals.last().end = std::max(now, m_start);
         m_completed += m_intervals.last().end - m_start;
         m_paused = true;
     }
+}
+qint64 TakeClock::pausedAt() const {
+    return m_paused && !m_intervals.isEmpty() ? m_intervals.last().end : -1;
 }
 void TakeClock::resume(qint64 now) {
     if (m_paused) {
@@ -264,17 +267,19 @@ QList<qint64> TakeClock::joins() const {
     return result;
 }
 
-Writer::Writer(QObject *parent) : QObject(parent) {
+Writer::Writer(QObject *parent) : QObject(parent), m_recorder(this), m_flushTimeout(this) {
     m_session.setRecorder(&m_recorder);
+    m_flushTimeout.setObjectName("flushTimeout");
     m_flushTimeout.setSingleShot(true);
-    m_flushTimeout.setInterval(10000);
-    connect(&m_flushTimeout, &QTimer::timeout, this, [this] { fail(tr("The encoder stopped responding, so the take was stopped.")); });
+    m_flushTimeout.setInterval(30000);
+    connect(&m_flushTimeout, &QTimer::timeout, this, [this] {
+        m_timedOut = true;
+        fail(tr("The encoder stopped responding, so the take was stopped."));
+        emitFinished();
+    });
     connect(&m_recorder, &QMediaRecorder::errorOccurred, this, [this](auto, const QString &message) { fail(message); });
     connect(&m_recorder, &QMediaRecorder::recorderStateChanged, this, [this](auto state) {
-        if (state == QMediaRecorder::StoppedState && m_stopping) {
-            m_flushTimeout.stop();
-            emit finished();
-        }
+        if (state == QMediaRecorder::StoppedState && m_stopping) emitFinished();
     });
 }
 static QMediaFormat recordingFormat(bool audio) {
@@ -394,12 +399,21 @@ void Writer::appendAudio(const QByteArray &data) {
 void Writer::drain() {
     if (m_draining || m_failed) return;
     m_draining = true;
-    while (!m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) m_frames.dequeue();
-    while (!m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
-        m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
+    while (!m_failed && !m_frames.isEmpty()) {
+        const auto frame = m_frames.head();
+        if (!m_video->sendVideoFrame(frame)) break;
+        if (!m_failed && !m_frames.isEmpty()) m_frames.dequeue();
+    }
+    while (!m_failed && !m_buffers.isEmpty()) {
+        const auto buffer = m_buffers.head();
+        if (!m_audio->sendAudioBuffer(buffer)) break;
+        if (!m_failed && !m_buffers.isEmpty()) {
+            m_queuedAudioUs -= buffer.duration();
+            m_buffers.dequeue();
+        }
     }
     m_draining = false;
-    if (m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();
+    if (!m_failed && m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();
 }
 void Writer::finish() {
     if (m_stopping) return;
@@ -416,7 +430,7 @@ void Writer::finish() {
     drain();
     if (m_recorder.recorderState() == QMediaRecorder::StoppedState) {
         m_flushTimeout.stop();
-        QTimer::singleShot(0, this, &Writer::finished);
+        QTimer::singleShot(0, this, &Writer::emitFinished);
     }
 }
 void Writer::fail(const QString &message) {
@@ -424,8 +438,18 @@ void Writer::fail(const QString &message) {
     m_failed = true;
     m_stopping = true;
     emit failed(message);
-    m_frames.clear(); m_buffers.clear();
+    m_frames.clear(); m_buffers.clear(); m_queuedAudioUs = 0;
     m_recorder.stop();
-    if (m_recorder.recorderState() == QMediaRecorder::StoppedState)
-        QTimer::singleShot(0, this, &Writer::finished);
+    if (m_recorder.recorderState() == QMediaRecorder::StoppedState) {
+        m_flushTimeout.stop();
+        QTimer::singleShot(0, this, &Writer::emitFinished);
+    } else if (!m_flushTimeout.isActive()) {
+        m_flushTimeout.start();
+    }
+}
+void Writer::emitFinished() {
+    if (m_finished) return;
+    m_finished = true;
+    m_flushTimeout.stop();
+    emit finished();
 }

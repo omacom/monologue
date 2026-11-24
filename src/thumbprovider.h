@@ -7,7 +7,10 @@ class ThumbProvider : public QQuickImageProvider {
 public:
     explicit ThumbProvider(std::shared_ptr<ThumbStore> store) : QQuickImageProvider(Image), m_store(std::move(store)) {}
     QImage requestImage(const QString &id, QSize *size, const QSize &requested) override {
-        QImage image = m_store->get(id.section('/', -1).toInt());
+        bool ok = false;
+        const int index = id.section('/', -1).toInt(&ok);
+        if (!ok) return {};
+        QImage image = m_store->get(index);
         if (image.isNull()) return {};
         if (size) *size = image.size();
         if (requested.height() > 0 && image.height() > requested.height())

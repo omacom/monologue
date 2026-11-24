@@ -165,7 +165,8 @@ double media::peak(const QByteArray &data, const QAudioFormat &format) {
     return std::min(result, 1.0);
 }
 QString media::copyAtomically(const QString &source, const QString &destination) {
-    if (QFileInfo(source).canonicalFilePath() == QFileInfo(destination).canonicalFilePath())
+    const auto canonicalSource = QFileInfo(source).canonicalFilePath();
+    if (!canonicalSource.isEmpty() && canonicalSource == QFileInfo(destination).canonicalFilePath())
         return QCoreApplication::translate("media", "Choose a destination outside the retained recording itself.");
     QFile input(source);
     if (!input.open(QIODevice::ReadOnly)) return input.errorString();
@@ -197,9 +198,9 @@ QString media::moveIntoPlace(const QString &partial, const QString &destination)
     struct stat existing;
     mode_t mode = 0666 & ~currentUmask();
     if (::stat(to.constData(), &existing) == 0) {
-        mode = existing.st_mode & 07777;
+        mode = existing.st_mode & 0777;
         // Group bits mean nothing without the group; keep the file to its owner if it can't be had.
-        if (::chown(from.constData(), uid_t(-1), existing.st_gid) != 0) mode &= 07700;
+        if (::chown(from.constData(), uid_t(-1), existing.st_gid) != 0) mode &= 0700;
     }
     if (::chmod(from.constData(), mode) != 0 || std::rename(from.constData(), to.constData()) != 0)
         return QCoreApplication::translate("media", "Could not move the finished MP4 into place.");
