@@ -114,7 +114,7 @@ private:
             } else if(subsamp>=0) {
                 const int sw=tj3YUVPlaneWidth(1, w, subsamp), sh=tj3YUVPlaneHeight(1, h, subsamp);
                 if(sw>0 && sh>0) {
-                    // Reuse a scratch buffer per encoder thread to avoid 8 MB mmap/munmap page faults on every 4K 4:2:2 frame.
+                    // Reuse a per-thread chroma scratch buffer instead of reallocating it on every non-4:2:0 JPEG frame.
                     thread_local QByteArray chroma;
                     const qsizetype needed=qsizetype(sw)*sh*2;
                     if(chroma.size()<needed) chroma.resize(needed);

@@ -553,17 +553,54 @@ private slots:
         QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,qPrintable(rgb.toHex()));
     }
     void directRgbFormatsRecordCorrectColors() {
-        // Every 32-bit RGB layout maps directly to 4:2:0 without copying through QImage.
+        // Every 32-bit RGB layout maps directly to 4:2:0 without copying through QImage;
+        // a three-channel colour catches any swapped R/G/B offsets, plus padded stride and premultiplied fallback.
         struct Case { QVideoFrameFormat::PixelFormat format; uchar px[4]; };
         const Case cases[]{
-            {QVideoFrameFormat::Format_BGRA8888, {0,0,255,255}},
-            {QVideoFrameFormat::Format_RGBA8888, {255,0,0,255}},
-            {QVideoFrameFormat::Format_ARGB8888, {255,255,0,0}},
-            {QVideoFrameFormat::Format_ABGR8888, {255,0,0,255}},
+            {QVideoFrameFormat::Format_BGRA8888, {20,128,240,255}},
+            {QVideoFrameFormat::Format_BGRX8888, {20,128,240,0}},
+            {QVideoFrameFormat::Format_RGBA8888, {240,128,20,255}},
+            {QVideoFrameFormat::Format_RGBX8888, {240,128,20,0}},
+            {QVideoFrameFormat::Format_ARGB8888, {255,240,128,20}},
+            {QVideoFrameFormat::Format_XRGB8888, {0,240,128,20}},
+            {QVideoFrameFormat::Format_ABGR8888, {255,20,128,240}},
+            {QVideoFrameFormat::Format_XBGR8888, {0,20,128,240}},
+            {QVideoFrameFormat::Format_ARGB8888_Premultiplied, {255,240,128,20}},
+        };
+        class PaddedBuffer : public QAbstractVideoBuffer {
+        public:
+            PaddedBuffer(QSize size, QVideoFrameFormat::PixelFormat fmt, const uchar px[4])
+                : m_format(size, fmt), m_stride(size.width()*4+32), m_bytes(qsizetype(m_stride)*size.height(), char(0x55)) {
+                for(int y=0;y<size.height();++y)
+                    for(int x=0;x<size.width();++x) std::memcpy(m_bytes.data()+qsizetype(y)*m_stride+x*4, px, 4);
+            }
+            QVideoFrameFormat format() const override { return m_format; }
+            MapData map(QVideoFrame::MapMode) override {
+                MapData d; d.planeCount=1; d.data[0]=reinterpret_cast<uchar*>(m_bytes.data());
+                d.bytesPerLine[0]=m_stride; d.dataSize[0]=int(m_bytes.size()); return d;
+            }
+        private:
+            QVideoFrameFormat m_format;
+            int m_stride;
+            QByteArray m_bytes;
         };
         QTemporaryDir directory;
-        for(int c=0;c<4;++c) {
-            const auto path=directory.filePath(QString("rgb-%1.mp4").arg(c));
+        auto checkFrame=[&](const QVideoFrame &frame, const QString &name) {
+            QCOMPARE(frame.toImage().pixelColor(0,0),QColor(240,128,20));
+            const auto path=directory.filePath(name);
+            Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
+            QVERIFY(writer.start(path,frame.surfaceFormat(),30,QAudioFormat(),0));
+            for(int i=0;i<3;++i) { writer.video(frame,qRound64(i*1000000.0/30)); QTest::qWait(33); }
+            writer.pause(120000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
+            QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
+            QProcess pixels;
+            pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
+            QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
+            const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
+            QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])>90 && quint8(rgb[1])<170 && quint8(rgb[2])<60,
+                     qPrintable(QString("%1: %2").arg(name,QString::fromLatin1(rgb.toHex()))));
+        };
+        for(int c=0;c<int(std::size(cases));++c) {
             QVideoFrameFormat fmt(QSize(64,64),cases[c].format);
             QVideoFrame frame(fmt); QVERIFY(frame.map(QVideoFrame::WriteOnly));
             for(int y=0;y<64;++y) {
@@ -571,19 +608,10 @@ private slots:
                 for(int x=0;x<64;++x) std::memcpy(row+x*4,cases[c].px,4);
             }
             frame.unmap();
-            QCOMPARE(frame.toImage().pixelColor(0,0),QColor(255,0,0));
-            Writer writer; QSignalSpy ended(&writer,&Writer::finished), errors(&writer,&Writer::failed);
-            QVERIFY(writer.start(path,fmt,30,QAudioFormat(),0));
-            for(int i=0;i<5;++i) { writer.video(frame,qRound64(i*1000000.0/30)); QTest::qWait(33); }
-            writer.pause(200000); writer.finish(); QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(),15000);
-            QVERIFY2(errors.isEmpty(),errors.isEmpty()?"":qPrintable(errors.first().first().toString()));
-            QProcess pixels;
-            pixels.start("ffmpeg",{"-v","error","-i",path,"-frames:v","1","-vf","scale=1:1","-pix_fmt","rgb24","-f","rawvideo","-"});
-            QVERIFY(pixels.waitForFinished()); QCOMPARE(pixels.exitCode(),0);
-            const auto rgb=pixels.readAllStandardOutput(); QCOMPARE(rgb.size(),3);
-            QVERIFY2(quint8(rgb[0])>200 && quint8(rgb[1])<60 && quint8(rgb[2])<60,
-                     qPrintable(QString("case %1: %2").arg(c).arg(QString::fromLatin1(rgb.toHex()))));
+            checkFrame(frame,QString("rgb-%1.mp4").arg(c));
         }
+        checkFrame(QVideoFrame(std::make_unique<PaddedBuffer>(QSize(64,64),QVideoFrameFormat::Format_BGRA8888,cases[0].px)),
+                   "rgb-padded.mp4");
     }
     void relabelledCameraRecordsItsColorSpace() {
         // A Cam Link sends packed 4:2:2 that Qt labels BT.601; once relabelled from
