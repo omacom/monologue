@@ -370,9 +370,18 @@ void Writer::appendAudio(const QByteArray &data) {
 void Writer::drain() {
     if (m_draining || m_failed) return;
     m_draining = true;
-    while (!m_failed && !m_frames.isEmpty() && m_video->sendVideoFrame(m_frames.head())) m_frames.dequeue();
-    while (!m_failed && !m_buffers.isEmpty() && m_audio->sendAudioBuffer(m_buffers.head())) {
-        m_queuedAudioUs -= m_buffers.head().duration(); m_buffers.dequeue();
+    while (!m_failed && !m_frames.isEmpty()) {
+        const auto frame = m_frames.head();
+        if (!m_video->sendVideoFrame(frame)) break;
+        if (!m_failed && !m_frames.isEmpty()) m_frames.dequeue();
+    }
+    while (!m_failed && !m_buffers.isEmpty()) {
+        const auto buffer = m_buffers.head();
+        if (!m_audio->sendAudioBuffer(buffer)) break;
+        if (!m_failed && !m_buffers.isEmpty()) {
+            m_queuedAudioUs -= buffer.duration();
+            m_buffers.dequeue();
+        }
     }
     m_draining = false;
     if (!m_failed && m_stopping && m_frames.isEmpty() && m_buffers.isEmpty()) m_recorder.stop();

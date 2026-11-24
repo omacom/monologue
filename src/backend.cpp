@@ -337,10 +337,8 @@ void Backend::writerFinished() {
     if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
     if(m_restartAfter) { m_restartAfter=false; deleteTake(); activateSources(); return; }
     if(timedOut) {
-        // The encoder never reached StoppedState; don't race normalizeMp4 against it or delete the take folder.
-        m_takeLock.reset();
-        m_takeId.clear(); m_clipPath.clear(); m_clipFileName.clear(); m_duration=0;
-        resetEdit({},{}); m_thumbnails.clear();
+        // The encoder never reached StoppedState; keep the folder on disk rather than racing normalizeMp4 against it.
+        m_takeLock.reset(); m_takeId.clear(); deleteTake();
         m_state="unavailable"; m_message=m_interruption; emit changed();
         return;
     }
