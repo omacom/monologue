@@ -14,6 +14,7 @@ AudioCapture::~AudioCapture() { stop(); }
 void AudioCapture::start(const QByteArray &device, const QAudioFormat &format) {
     m_device = device;
     m_format = format;
+    m_timeline = AudioTimeline(format.sampleRate());
     m_loop = pa_mainloop_new();
     if (!m_loop) { fail(tr("Could not create the audio capture loop.")); return; }
     m_context = pa_context_new(pa_mainloop_get_api(m_loop), "Monologue");
@@ -115,7 +116,13 @@ void AudioCapture::readAvailable() {
         QByteArray pcm = data ? QByteArray(static_cast<const char*>(data), qsizetype(bytes))
                               : QByteArray(qsizetype(bytes), m_format.sampleFormat() == QAudioFormat::UInt8 ? char(128) : char(0));
         if (pa_stream_drop(m_stream) < 0) { fail(tr("Could not advance microphone capture.")); break; }
-        emit samples(pcm, capturedAt);
+        const int frameBytes = m_format.bytesPerFrame();
+        const auto placed = m_timeline.place(capturedAt, qint64(bytes) / frameBytes);
+        if (placed.resynced) qCDebug(audioTiming) << "Microphone timeline restarted at" << capturedAt;
+        if (placed.slip) qCDebug(audioTiming) << "Following microphone clock drift by" << placed.slip << "frame";
+        if (placed.slip > 0) pcm.append(pcm.right(frameBytes));
+        else if (placed.slip < 0) pcm.chop(frameBytes);
+        emit samples(pcm, placed.capturedAt);
     }
     m_reading = false;
 }
