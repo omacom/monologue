@@ -86,33 +86,36 @@ void Backend::retranslate() {
     emit meterChanged();
 }
 QString Backend::describeFormat() const {
-    return tr("%1 × %2 · up to %3 fps").arg(m_cameraFormat.resolution().width()).arg(m_cameraFormat.resolution().height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
+    return tr("%1 × %2 · up to %3 fps").arg(m_resolution.width()).arg(m_resolution.height()).arg(m_fps,0,'f',m_fps==int(m_fps)?0:2);
 }
 std::pair<bool,bool> Backend::listDevices() {
-    // Infrared sensors (for face login) appear as greyscale-only cameras; they can't record a usable take.
-    QList<QCameraDevice> cameras;
+    // Qt's cameras, then the libcamera ones only PipeWire delivers, as id and name.
+    QList<std::pair<QByteArray,QString>> cameras;
     for(const auto &d:QMediaDevices::videoInputs()) {
+        // Infrared sensors (for face login) appear as greyscale-only cameras; they can't record a usable take.
         const auto formats=d.videoFormats();
         if(std::all_of(formats.begin(),formats.end(),[](const auto &f) {
             return f.pixelFormat()==QVideoFrameFormat::Format_Y8 || f.pixelFormat()==QVideoFrameFormat::Format_Y16;
         })) continue;
-        cameras.append(d);
+        cameras.append({d.id(),d.description()});
     }
+    for(const auto &s:PipeWireCamera::sources()) cameras.append({s.id,s.description});
     const auto microphones=QMediaDevices::audioInputs();
     // Mid-take, a missing source has to stop the recording rather than be replaced.
     if (!m_writer) {
-        auto ids=[](const auto &devices) { QStringList result; for(const auto &d:devices) result<<deviceId(d.id()); return result; };
-        m_cameraId=media::chooseSource(ids(cameras),deviceId(QMediaDevices::defaultVideoInput().id()),m_cameraId);
-        if (m_audioId!="none") m_audioId=media::chooseSource(ids(microphones),deviceId(QMediaDevices::defaultAudioInput().id()),m_audioId);
+        QStringList cameraIds; for(const auto &c:cameras) cameraIds<<deviceId(c.first);
+        QStringList microphoneIds; for(const auto &d:microphones) microphoneIds<<deviceId(d.id());
+        m_cameraId=media::chooseSource(cameraIds,deviceId(QMediaDevices::defaultVideoInput().id()),m_cameraId);
+        if (m_audioId!="none") m_audioId=media::chooseSource(microphoneIds,deviceId(QMediaDevices::defaultAudioInput().id()),m_audioId);
     }
-    auto label=[](const auto &device,const auto &all) {
-        int count=0;
-        for(const auto &other:all) if(other.description()==device.description()) ++count;
-        return count>1 ? device.description()+" · "+QString::fromUtf8(device.id()) : device.description();
+    auto label=[](const QByteArray &id,const QString &description,const QStringList &all) {
+        return all.count(description)>1 ? description+" · "+QString::fromUtf8(id) : description;
     };
+    QStringList cameraNames; for(const auto &c:cameras) cameraNames<<c.second;
+    QStringList microphoneNames; for(const auto &d:microphones) microphoneNames<<d.description();
     m_cameras.clear(); m_microphones.clear();
-    for(const auto &d:cameras) m_cameras.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,cameras)}});
-    for(const auto &d:microphones) m_microphones.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d,microphones)}});
+    for(const auto &c:cameras) m_cameras.append(QVariantMap{{"id",deviceId(c.first)},{"label",label(c.first,c.second,cameraNames)}});
+    for(const auto &d:microphones) m_microphones.append(QVariantMap{{"id",deviceId(d.id())},{"label",label(d.id(),d.description(),microphoneNames)}});
     m_microphones.append(QVariantMap{{"id","none"},{"label",tr("No audio")}});
     const bool cameraMissing=indexOf(m_cameras,m_cameraId)<0;
     const bool audioMissing=indexOf(m_microphones,m_audioId)<0;
@@ -123,6 +126,7 @@ std::pair<bool,bool> Backend::listDevices() {
 }
 void Backend::releaseSources(bool keepPicture) {
     if(m_camera) { m_camera->disconnect(this); m_camera->stop(); m_capture.setCamera(nullptr); delete m_camera; m_camera=nullptr; }
+    if(m_pipewireCamera) { m_pipewireCamera->disconnect(this); delete m_pipewireCamera; m_pipewireCamera=nullptr; }
     if(m_audio) { m_audio->disconnect(this); m_audio->stop(); delete m_audio; m_audio=nullptr; }
     m_cameraHealthy=false; m_audioHealthy=false;
     m_videoOrigin=-1; m_audioCapturedUntil=-1; m_videoCapturedUntil=-1;
@@ -139,12 +143,28 @@ void Backend::activateSources() {
     for(const auto &d:QMediaDevices::videoInputs()) if(deviceId(d.id())==m_cameraId) selectedCamera=d;
     QAudioDevice selectedAudio;
     for(const auto &d:QMediaDevices::audioInputs()) if(deviceId(d.id())==m_audioId) selectedAudio=d;
-    if(selectedCamera.isNull()) { m_state="unavailable"; m_message=tr("Connect a camera or choose an available video source."); }
+    const QByteArray pipewireId=QByteArray::fromBase64(m_cameraId.toLatin1());
+    m_resolution=QSize();
+    if(selectedCamera.isNull() && PipeWireCamera::isSource(pipewireId)) {
+        // The stream settles the format; frames arrive only after formatChanged.
+        m_cameraLabel=m_cameras.value(cameraIndex()).toMap()["label"].toString();
+        m_fps=30;
+        m_pipewireCamera=new PipeWireCamera(this);
+        connect(m_pipewireCamera,&PipeWireCamera::formatChanged,this,[this](QSize size,double fps) {
+            m_resolution=size; m_fps=media::targetFps(fps,fps); m_formatLabel=describeFormat(); emit changed();
+        });
+        connect(m_pipewireCamera,&PipeWireCamera::frameReady,this,&Backend::receiveVideo);
+        connect(m_pipewireCamera,&PipeWireCamera::failed,this,[this](const QString &error) { sourceFailed(tr("Camera: %1").arg(error)); });
+        m_pipewireCamera->start(pipewireId);
+    }
+    else if(selectedCamera.isNull()) { m_state="unavailable"; m_message=tr("Connect a camera or choose an available video source."); }
     else {
         m_cameraFormat=media::bestCameraFormat(selectedCamera);
         if(m_cameraFormat.isNull()) { m_state="unavailable"; m_message=tr("This camera advertises no supported video formats."); }
         else {
             m_fps=media::targetFps(m_cameraFormat.minFrameRate(),m_cameraFormat.maxFrameRate());
+            m_resolution=m_cameraFormat.resolution();
+            m_cameraLabel=selectedCamera.description();
             m_formatLabel=describeFormat();
             m_camera=new QCamera(selectedCamera,this);
             m_camera->setCameraFormat(m_cameraFormat);
@@ -178,21 +198,21 @@ void Backend::updateReady() {
     }
 }
 void Backend::receiveVideo(QVideoFrame frame) {
-    if(!m_camera || !frame.isValid()) return;
+    if((!m_camera && !m_pipewireCamera) || !frame.isValid()) return;
     // uvcvideo flags a frame the camera cut short, but Qt passes it on regardless,
     // and it decodes as a coloured grid. Skip it, and the recording holds the frame
     // before. A camera that sends nothing else still times out as stalled.
     if(!media::completeFrame(frame)) return;
     // Qt maps V4L2's sRGB colorspace to BT.601 and ignores the YCbCr encoding the
     // driver reports, so HDMI capture cards sending BT.709 decode with skewed colors.
-    if(!m_cameraHealthy) m_colorSpace=media::cameraColorSpace(m_camera->cameraDevice().id());
+    if(!m_cameraHealthy) m_colorSpace=m_camera ? media::cameraColorSpace(m_camera->cameraDevice().id()) : QVideoFrameFormat::ColorSpace_Undefined;
     if(frame.surfaceFormat().colorSpace()==QVideoFrameFormat::ColorSpace_BT601 &&
        m_colorSpace!=QVideoFrameFormat::ColorSpace_Undefined && m_colorSpace!=QVideoFrameFormat::ColorSpace_BT601) {
         auto format=frame.surfaceFormat(); format.setColorSpace(m_colorSpace);
         frame=media::withFormat(frame,format);
     }
     m_lastVideoAt=now();
-    if(frame.size()!=m_cameraFormat.resolution()) {
+    if(frame.size()!=m_resolution) {
         sourceFailed(tr("The camera did not provide its maximum resolution. Choose another source or Retry.")); return;
     }
     m_lastFrame=frame;
@@ -201,7 +221,7 @@ void Backend::receiveVideo(QVideoFrame frame) {
     if(!m_cameraHealthy) {
         m_cameraHealthy=true;
         m_settings.setValue("camera/id",m_cameraId);
-        m_settings.setValue("camera/label",m_camera->cameraDevice().description());
+        m_settings.setValue("camera/label",m_cameraLabel);
         updateReady();
     }
     qint64 captureTime=m_lastVideoAt;
@@ -256,7 +276,7 @@ void Backend::tick() {
         if(duration!=m_duration) { m_duration=duration; emit changed(); }
     }
     if((m_state=="starting" || m_state=="ready" || m_state=="recording" || m_state=="paused") && time-m_activatedAt>5000000) {
-        if(m_camera && time-m_lastVideoAt>3000000) sourceFailed(tr("The camera stopped delivering video. Check the connection, then Retry."));
+        if((m_camera || m_pipewireCamera) && time-m_lastVideoAt>3000000) sourceFailed(tr("The camera stopped delivering video. Check the connection, then Retry."));
         else if(audioEnabled() && m_audio && time-m_lastAudioAt>3000000) sourceFailed(tr("The microphone stopped delivering audio. Check the connection, then Retry."));
     }
 }
@@ -363,7 +383,7 @@ void Backend::probeClip(const QString &path,bool currentTake) {
     connect(watcher,&QFutureWatcher<media::Probe>::finished,this,[this,watcher,path,currentTake] {
         const auto result=watcher->result(); watcher->deleteLater(); m_probing=false;
         if(m_discardAfter) { m_discardAfter=false; deleteTake(); emit safeToClose(); return; }
-        const bool correct=currentTake ? result.size==m_cameraFormat.resolution() && result.audio==audioEnabled() : true;
+        const bool correct=currentTake ? result.size==m_resolution && result.audio==audioEnabled() : true;
         if(result.ok && correct) {
             m_clipPath=path; m_clipFileName=QFileInfo(path).fileName(); m_duration=result.duration;
             m_state="finished"; m_message=m_interruption; m_clipAudio=result.audio;
